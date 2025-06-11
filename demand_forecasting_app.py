@@ -217,20 +217,20 @@ def main():
             
             # Product filters
             if 'PRODUCT' in df.columns:
-                products = ['All'] + list(df['PRODUCT'].unique())
+                products = ['All'] + sorted(df['PRODUCT'].unique())
                 selected_product = st.sidebar.selectbox("Select Product", products)
                 if selected_product != 'All':
                     df = df[df['PRODUCT'] == selected_product]
             
             # Supply Chain Parameters
             st.sidebar.header("🚛 Supply Chain Parameters")
-            lead_time_weeks = st.sidebar.slider("Lead Time (weeks)", 0, 8, 2, 
+            lead_time_weeks = st.sidebar.slider("Lead Time (weeks)", 0, 52, 0, 
                                               help="Time between order placement and delivery")
             
-            buffer_pct = st.sidebar.slider("Buffer Stock (%)", -50, 100, 15,
+            buffer_pct = st.sidebar.slider("Buffer Stock (%)", 0, 100, 0,
                                          help="Percentage adjustment to forecasted demand")
             
-            buffer_qty = st.sidebar.number_input("Buffer Stock (Quantity)", -1000, 1000, 50,
+            buffer_qty = st.sidebar.number_input("Buffer Stock (Quantity)", 0, 1000000, 0,
                                                help="Fixed quantity adjustment to buffer stock")
             
             # Generate forecasts

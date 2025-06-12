@@ -211,20 +211,24 @@ def main():
             # Store filters
             if 'STORE' in df.columns:
                 stores = ['All'] + list(df['STORE'].unique())
+                # Remove decimal points from store names if they are numbers
+                stores = ['All'] + [str(int(s)) if isinstance(s, (int, float)) and float(s).is_integer() else str(s) for s in df['STORE'].unique()]
                 selected_store = st.sidebar.selectbox("Select Store", stores)
                 if selected_store != 'All':
-                    df = df[df['STORE'] == selected_store]
-            
+                    df = df[df['STORE'].astype(str) == selected_store]
+
             # Product filters
             if 'PRODUCT' in df.columns:
                 products = ['All'] + sorted(df['PRODUCT'].unique())
+                # Remove decimal points from product names if they are numbers
+                products = ['All'] + [str(int(p)) if isinstance(p, (int, float)) and float(p).is_integer() else str(p) for p in sorted(df['PRODUCT'].unique())]
                 selected_product = st.sidebar.selectbox("Select Product", products)
                 if selected_product != 'All':
-                    df = df[df['PRODUCT'] == selected_product]
+                    df = df[df['PRODUCT'].astype(str) == selected_product]
             
             # Supply Chain Parameters
             st.sidebar.header("🚛 Supply Chain Parameters")
-            lead_time_weeks = st.sidebar.slider("Lead Time (weeks)", 0, 52, 0, 
+            lead_time_weeks = st.sidebar.slider("Lead Time (weeks)", 0, 12, 0, 
                                               help="Time between order placement and delivery")
             
             buffer_pct = st.sidebar.slider("Buffer Stock (%)", 0, 100, 0,
@@ -255,12 +259,38 @@ def main():
                     col1, col2 = st.columns(2)
                     
                     with col1:
+                        st.subheader("📈 Historical Forecasts")
+                        
+                        historicalFig = go.Figure()
+                        
+                        # Add historical actual data if available
+                        if historical_data is not None:
+                            historicalFig.add_trace(go.Scatter(
+                                x=historical_data['WEEK'],
+                                y=historical_data['ACTUAL'],
+                                mode='lines',
+                                name='Historical Actual',
+                                line=dict(color='gray', width=2),
+                                opacity=0.7
+                            ))
+
+                        historicalFig.update_layout(
+                            title=f"Historical Actuals - {target_col}",
+                            xaxis_title="Week",
+                            yaxis_title=target_col,
+                            hovermode='x unified',
+                            height=500
+                        )
+                        
+                        st.plotly_chart(historicalFig, use_container_width=True)
+                    
+                    with col2:
                         st.subheader("📈 Original vs Adjusted Forecasts")
                         
-                        fig = go.Figure()
+                        forecastFig = go.Figure()
                         
                         # Add original forecast
-                        fig.add_trace(go.Scatter(
+                        forecastFig.add_trace(go.Scatter(
                             x=original_forecast['WEEK'],
                             y=original_forecast['FORECAST'],
                             mode='lines+markers',
@@ -270,7 +300,7 @@ def main():
                         ))
                         
                         # Add adjusted forecast
-                        fig.add_trace(go.Scatter(
+                        forecastFig.add_trace(go.Scatter(
                             x=adjusted_forecast['WEEK'],
                             y=adjusted_forecast['ADJUSTED_FORECAST'],
                             mode='lines+markers',
@@ -278,48 +308,36 @@ def main():
                             line=dict(color='red', width=3, dash='dash'),
                             marker=dict(size=6)
                         ))
-                        
-                        # Add historical actual data if available
-                        if historical_data is not None:
-                            fig.add_trace(go.Scatter(
-                                x=historical_data['WEEK'],
-                                y=historical_data['ACTUAL'],
-                                mode='lines',
-                                name='Historical Actual',
-                                line=dict(color='gray', width=2),
-                                opacity=0.7
-                            ))
-                        
-                        fig.update_layout(
+
+                        forecastFig.update_layout(
                             title=f"Demand Forecast Comparison - {target_col}",
                             xaxis_title="Week",
                             yaxis_title=target_col,
                             hovermode='x unified',
                             height=500
                         )
+
+                        st.plotly_chart(forecastFig, use_container_width=True)
+
+                    st.subheader("📊 Impact Analysis")
                         
-                        st.plotly_chart(fig, use_container_width=True)
-                    
-                    with col2:
-                        st.subheader("📊 Impact Analysis")
-                        
-                        # Calculate impact metrics
-                        total_original = original_forecast['FORECAST'].sum()
-                        total_adjusted = adjusted_forecast['ADJUSTED_FORECAST'].sum()
-                        impact_qty = total_adjusted - total_original
-                        impact_pct = (impact_qty / total_original) * 100 if total_original > 0 else 0
+                    # Calculate impact metrics
+                    total_original = original_forecast['FORECAST'].sum()
+                    total_adjusted = adjusted_forecast['ADJUSTED_FORECAST'].sum()
+                    impact_qty = total_adjusted - total_original
+                    impact_pct = (impact_qty / total_original) * 100 if total_original > 0 else 0
                         
                         # Display metrics
-                        metrics_col1, metrics_col2 = st.columns(2)
+                    metrics_col1, metrics_col2 = st.columns(2)
                         
-                        with metrics_col1:
-                            st.metric("Original Forecast Total", f"{total_original:,.0f}")
-                            st.metric("Lead Time Adjustment", f"{lead_time_weeks} weeks")
+                    with metrics_col1:
+                        st.metric("Original Forecast Total", f"{total_original:,.0f}")
+                        st.metric("Lead Time Adjustment", f"{lead_time_weeks} weeks")
                         
-                        with metrics_col2:
-                            st.metric("Adjusted Forecast Total", f"{total_adjusted:,.0f}", 
-                                    delta=f"{impact_qty:+,.0f}")
-                            st.metric("Total Impact", f"{impact_pct:+.1f}%")
+                    with metrics_col2:
+                        st.metric("Adjusted Forecast Total", f"{total_adjusted:,.0f}", 
+                                delta=f"{impact_qty:+,.0f}")
+                        st.metric("Total Impact", f"{impact_pct:+.1f}%")
                         
                         # Buffer stock breakdown
                         st.subheader("🛡️ Buffer Stock Breakdown")
@@ -346,16 +364,9 @@ def main():
                     # Detailed forecast tables
                     st.header("📋 Detailed Forecast Data")
                     
-                    tab1, tab2, tab3 = st.tabs(["Original Forecast", "Adjusted Forecast", "Comparison"])
+                    tab1, tab2 = st.tabs(["Adjusted Forecast", "Comparison"])
                     
                     with tab1:
-                        st.subheader("Original Forecast Details")
-                        display_original = original_forecast[['WEEK', 'FORECAST']].copy()
-                        display_original['WEEK'] = display_original['WEEK'].dt.strftime('%Y-%m-%d')
-                        display_original['FORECAST'] = display_original['FORECAST'].round(0)
-                        st.dataframe(display_original, use_container_width=True)
-                    
-                    with tab2:
                         st.subheader("Adjusted Forecast Details")
                         display_adjusted = adjusted_forecast[['WEEK', 'FORECAST', 'BUFFER_PCT_ADJ', 'TOTAL_BUFFER', 'ADJUSTED_FORECAST']].copy()
                         display_adjusted['WEEK'] = display_adjusted['WEEK'].dt.strftime('%Y-%m-%d')
@@ -363,7 +374,7 @@ def main():
                         display_adjusted.columns = ['Week', 'Base Forecast', 'Buffer % Adj', 'Total Buffer', 'Final Forecast']
                         st.dataframe(display_adjusted, use_container_width=True)
                     
-                    with tab3:
+                    with tab2:
                         st.subheader("Side-by-Side Comparison")
                         comparison_df = pd.merge(
                             original_forecast[['WEEK', 'FORECAST']].rename(columns={'FORECAST': 'Original'}),

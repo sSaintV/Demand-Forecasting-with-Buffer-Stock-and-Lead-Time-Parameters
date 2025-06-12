@@ -348,36 +348,51 @@ def main():
                     with col1:
                         st.subheader("📈 Historical Data")
                         
-                        historicalFig = go.Figure()
-                        
-                        # Add historical actual data if available
-                        if historical_data is not None:
-                            historicalFig.add_trace(go.Scatter(
-                                x=historical_data['WEEK'],
-                                y=historical_data['ACTUAL'],
-                                mode='lines',
-                                name='Historical Actual',
-                                line=dict(color='gray', width=2),
-                                opacity=0.7
-                            ))
+                        chart_type = st.radio(
+                            "Chart Type", 
+                            ["Line Chart", "Bar Chart"], 
+                            index=0, 
+                            horizontal=True
+                        )
 
-                        historicalFig.update_layout(
+                        historical_fig = go.Figure()
+
+                        if historical_data is not None:
+                            if chart_type == "Line Chart":
+                                historical_fig.add_trace(go.Scatter(
+                                    x=historical_data['WEEK'],
+                                    y=historical_data['ACTUAL'],
+                                    mode='lines',
+                                    name='Historical Actual',
+                                    line=dict(color='gray', width=2),
+                                    opacity=0.7
+                                ))
+                            elif chart_type == "Bar Chart":
+                                historical_fig.add_trace(go.Bar(
+                                    x=historical_data['WEEK'],
+                                    y=historical_data['ACTUAL'],
+                                    name='Historical Actual',
+                                    marker_color='gray',
+                                    opacity=0.7
+                                ))
+
+                        historical_fig.update_layout(
                             title=f"Historical Actuals - {target_col}",
                             xaxis_title="Week",
                             yaxis_title=target_col,
                             hovermode='x unified',
                             height=500
                         )
-                        
-                        st.plotly_chart(historicalFig, use_container_width=True)
-                    
+
+                        st.plotly_chart(historical_fig, use_container_width=True)
+                                            
                     with col2:
                         st.subheader("📈 Original vs Adjusted Forecasts")
-                        
-                        forecastFig = go.Figure()
-                        
+
+                        forecast_fig = go.Figure()
+
                         # Add original forecast
-                        forecastFig.add_trace(go.Scatter(
+                        forecast_fig.add_trace(go.Scatter(
                             x=original_forecast['WEEK'],
                             y=original_forecast['FORECAST'],
                             mode='lines+markers',
@@ -387,7 +402,7 @@ def main():
                         ))
                         
                         # Add adjusted forecast
-                        forecastFig.add_trace(go.Scatter(
+                        forecast_fig.add_trace(go.Scatter(
                             x=adjusted_forecast['WEEK'],
                             y=adjusted_forecast['ADJUSTED_FORECAST'],
                             mode='lines+markers',
@@ -396,7 +411,7 @@ def main():
                             marker=dict(size=6)
                         ))
 
-                        forecastFig.update_layout(
+                        forecast_fig.update_layout(
                             title=f"Demand Forecast Comparison - {target_col}",
                             xaxis_title="Week",
                             yaxis_title=target_col,
@@ -404,7 +419,7 @@ def main():
                             height=500
                         )
 
-                        st.plotly_chart(forecastFig, use_container_width=True)
+                        st.plotly_chart(forecast_fig, use_container_width=True)
 
                     anlcol1, anlcol2 = st.columns(2)
                     

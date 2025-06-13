@@ -32,8 +32,11 @@ class DemandForecaster:
         # Convert WEEK to datetime if it's not already
         try:
             df['WEEK'] = pd.to_datetime(df['WEEK'])
-        except:
-            st.error("Error converting WEEK column to datetime. Please ensure WEEK column contains valid dates.")
+        except Exception as e:
+            st.error(
+                "Error converting WEEK column to datetime. "
+                "Please ensure WEEK column contains valid dates."
+            )
             return None
             
         # Handle missing values
@@ -51,8 +54,11 @@ class DemandForecaster:
     
     def create_forecast_features(self, df, target_col):
         """Create features for forecasting"""
-        # Aggregate data by week if multiple records per week
-        weekly_data = df.groupby('WEEK').agg({
+        # If PRODUCT exists, group by WEEK and PRODUCT
+        group_cols = ['WEEK']
+        if 'PRODUCT' in df.columns:
+            group_cols.append('PRODUCT')
+        weekly_data = df.groupby(group_cols).agg({
             target_col: 'sum',
             'BASE_PRICE': 'mean',
             'PRICE': 'mean',
@@ -119,6 +125,11 @@ class DemandForecaster:
         # Create future features (simplified - using last known values and trends)
         last_row = clean_df.iloc[-1:].copy()
         forecasts = []
+
+        if 'PRODUCT' in clean_df.columns:
+            product_value = clean_df['PRODUCT'].iloc[-1]
+        else:
+            product_value = None
         
         for i, date in enumerate(forecast_dates):
             future_row = last_row.copy()
@@ -126,6 +137,9 @@ class DemandForecaster:
             future_row['week_number'] = date.isocalendar()[1]
             future_row['month'] = date.month
             future_row['quarter'] = date.quarter
+
+            if product_value is not None:
+                future_row['PRODUCT'] = product_value
             
             # Simple trend continuation for lag features
             if i == 0:
@@ -137,10 +151,12 @@ class DemandForecaster:
             if model_type == 'Linear Regression':
                 X_future = self.scaler.transform(X_future)
             pred = self.model.predict(X_future)[0]
+            
             forecasts.append({
                 'WEEK': date,
-                'FORECAST': max(0, pred),  # Ensure non-negative forecasts
-                'TYPE': 'Original'
+                'FORECAST': max(0, pred),
+                'TYPE': 'Original',
+                'PRODUCT': product_value if product_value is not None else np.nan
             })
         
         forecast_df = pd.DataFrame(forecasts)
@@ -158,7 +174,7 @@ class DemandForecaster:
         })
         return forecast_df, historical_df
     
-    def apply_supply_chain_adjustments(self, forecast_df, lead_time_weeks, safety_pct, safety_qty):
+    def apply_supply_chain_adjustments(self, forecast_df, lead_time_weeks, safety_pct):
         """Apply lead time and Safety Stock adjustments to forecasts"""
         adjusted_forecast = forecast_df.copy()
         
@@ -168,9 +184,8 @@ class DemandForecaster:
         
         # Apply Safety Stock adjustments
         adjusted_forecast['SAFETY_PCT_ADJ'] = adjusted_forecast['FORECAST'] * (safety_pct / 100)
-        adjusted_forecast['TOTAL_SAFETY'] = adjusted_forecast['SAFETY_PCT_ADJ'] + safety_qty
-        adjusted_forecast['ADJUSTED_FORECAST'] = adjusted_forecast['FORECAST'] + adjusted_forecast['TOTAL_SAFETY']
-        
+        adjusted_forecast['ADJUSTED_FORECAST'] = adjusted_forecast['FORECAST'] + adjusted_forecast['SAFETY_PCT_ADJ']
+
         # Ensure non-negative values
         adjusted_forecast['ADJUSTED_FORECAST'] = adjusted_forecast['ADJUSTED_FORECAST'].clip(lower=0)
         
@@ -320,9 +335,6 @@ def main():
 
             safety_pct = st.sidebar.slider("Safety Stock (%)", 0, 100, 0,
                                          help="Percentage adjustment to forecasted demand")
-
-            safety_qty = st.sidebar.number_input("Safety Stock (Quantity)", 0, 1000000, 0,
-                                               help="Fixed quantity adjustment to Safety Stock")
             
             # Generate forecasts
             st.header("🔮 Demand Forecasting Results")
@@ -339,8 +351,32 @@ def main():
                 if original_forecast is not None:
                     # Apply supply chain adjustments
                     adjusted_forecast = forecaster.apply_supply_chain_adjustments(
-                        original_forecast, lead_time_weeks, safety_pct, safety_qty
+                        original_forecast, lead_time_weeks, safety_pct
                     )
+
+                    # Date range filter for display (after forecast is generated)
+                    st.sidebar.header("📅 Display Range")
+                    # Only use the forecasted weeks for the display range
+                    forecast_weeks = original_forecast['WEEK'].sort_values().unique()
+                    min_week = forecast_weeks[0].to_pydatetime()
+                    max_week = forecast_weeks[-1].to_pydatetime()
+
+                    display_range = st.sidebar.slider(
+                        "Select Forecasted Date Range to Display",
+                        min_value=min_week,
+                        max_value=max_week,
+                        value=(min_week, max_week),
+                        step=pd.Timedelta(weeks=1),
+                        format="YYYY-MM-DD"
+                    )
+
+                    # When filtering, also convert the WEEK column to datetime if needed:
+                    original_forecast_display = original_forecast[
+                        (original_forecast['WEEK'] >= display_range[0]) & (original_forecast['WEEK'] <= display_range[1])
+                    ]
+                    adjusted_forecast_display = adjusted_forecast[
+                        (adjusted_forecast['WEEK'] >= display_range[0]) & (adjusted_forecast['WEEK'] <= display_range[1])
+                    ]
                     
                     # Create visualizations
                     col1, col2 = st.columns(2)
@@ -393,8 +429,8 @@ def main():
 
                         # Add original forecast
                         forecast_fig.add_trace(go.Scatter(
-                            x=original_forecast['WEEK'],
-                            y=original_forecast['FORECAST'],
+                            x=original_forecast_display['WEEK'],
+                            y=original_forecast_display['FORECAST'],
                             mode='lines+markers',
                             name='Original Forecast',
                             line=dict(color='blue', width=3),
@@ -403,8 +439,8 @@ def main():
                         
                         # Add adjusted forecast
                         forecast_fig.add_trace(go.Scatter(
-                            x=adjusted_forecast['WEEK'],
-                            y=adjusted_forecast['ADJUSTED_FORECAST'],
+                            x=adjusted_forecast_display['WEEK'],
+                            y=adjusted_forecast_display['ADJUSTED_FORECAST'],
                             mode='lines+markers',
                             name='Adjusted Forecast (Lead Time + Buffer)',
                             line=dict(color='red', width=3, dash='dash'),
@@ -429,10 +465,9 @@ def main():
                         # Calculate impact metrics
                         total_original = original_forecast['FORECAST'].sum()
                         total_adjusted = adjusted_forecast['ADJUSTED_FORECAST'].sum()
-                        impact_qty = total_adjusted - total_original
-                        impact_pct = (impact_qty / total_original) * 100 if total_original > 0 else 0
-                            
-                            # Display metrics
+                        impact_pct = (total_adjusted - total_original) / total_original * 100 if total_original > 0 else 0
+
+                        # Display metrics
                         metrics_col1, metrics_col2 = st.columns(2)
                             
                         with metrics_col1:
@@ -440,19 +475,18 @@ def main():
                             st.metric("Lead Time Adjustment", f"{lead_time_weeks} weeks")
                             
                         with metrics_col2:
-                            st.metric("Adjusted Forecast Total", f"{total_adjusted:,.0f}", 
-                                    delta=f"{impact_qty:+,.0f}")
+                            st.metric("Adjusted Forecast Total", f"{total_adjusted:,.0f}"
+                                      )
                             st.metric("Total Impact", f"{impact_pct:+.1f}%")
                             
                     with anlcol2:  
                         # Safety Stock breakdown
                         st.subheader("🛡️ Safety Stock Breakdown")
                         safety_breakdown = pd.DataFrame({
-                            'Component': ['Base Forecast', 'Stock % Adjustment', 'Stock Qty Adjustment', 'Total Adjusted'],
+                            'Component': ['Base Forecast', 'Stock % Adjustment', 'Total Adjusted'],
                             'Value': [
                                 total_original,
                                 adjusted_forecast['SAFETY_PCT_ADJ'].sum(),
-                                safety_qty * len(adjusted_forecast),
                                 total_adjusted
                             ]
                         })
@@ -467,31 +501,59 @@ def main():
                         fig_bar.update_layout(height=400)
                         st.plotly_chart(fig_bar, use_container_width=True)
                     
-                                        # Detailed forecast tables
+                    # Detailed forecast tables
                     st.header("📋 Detailed Forecast Data")
                     
                     tab1, tab2 = st.tabs(["Adjusted Forecast", "Comparison"])
-                    
+
                     with tab1:
                         st.subheader("Adjusted Forecast Details")
-                        display_adjusted = adjusted_forecast[['WEEK', 'FORECAST', 'SAFETY_PCT_ADJ', 'TOTAL_SAFETY', 'ADJUSTED_FORECAST']].copy()
+                        # Add Lead Time and PRODUCT columns if available
+                        display_adjusted = adjusted_forecast.copy()
+                        display_adjusted['Lead Time (weeks)'] = lead_time_weeks
+                        # Ensure PRODUCT column exists for display
+                        if 'PRODUCT' not in display_adjusted.columns and 'PRODUCT' in df.columns:
+                            display_adjusted['PRODUCT'] = df['PRODUCT'].iloc[0]  # fallback if missing
+                        # Format week
                         display_adjusted['WEEK'] = display_adjusted['WEEK'].dt.strftime('%Y-%m-%d')
                         display_adjusted = display_adjusted.round(0)
-                        display_adjusted.columns = ['Week', 'Base Forecast', 'Safety % Adj', 'Total Safety', 'Final Forecast']
+                        # Reorder columns for clarity
+                        display_adjusted = display_adjusted[['WEEK', 'PRODUCT', 'Lead Time (weeks)', 'FORECAST', 'SAFETY_PCT_ADJ', 'ADJUSTED_FORECAST']]
+                        display_adjusted.columns = ['Week', 'Product', 'Lead Time (weeks)', 'Base Forecast', 'Safety % Adj', 'Final Forecast']
                         st.dataframe(display_adjusted, use_container_width=True)
-                    
+
                     with tab2:
                         st.subheader("Side-by-Side Comparison")
-                        comparison_df = pd.merge(
-                            original_forecast[['WEEK', 'FORECAST']].rename(columns={'FORECAST': 'Original'}),
-                            adjusted_forecast[['WEEK', 'ADJUSTED_FORECAST']].rename(columns={'ADJUSTED_FORECAST': 'Adjusted'}),
-                            on='WEEK',
-                            how='outer'
-                        ).fillna(0)
-                        comparison_df['Difference'] = comparison_df['Adjusted'] - comparison_df['Original']
-                        comparison_df['% Change'] = ((comparison_df['Adjusted'] / comparison_df['Original']) - 1) * 100
-                        comparison_df['WEEK'] = comparison_df['WEEK'].dt.strftime('%Y-%m-%d')
-                        comparison_df = comparison_df.round(2)
+                        # Merge on WEEK and PRODUCT if available
+                        if 'PRODUCT' in original_forecast.columns and 'PRODUCT' in adjusted_forecast.columns:
+                            comparison_df = pd.merge(
+                                original_forecast[['WEEK', 'PRODUCT', 'FORECAST']].rename(columns={'FORECAST': 'Original'}),
+                                adjusted_forecast[['WEEK', 'PRODUCT', 'ADJUSTED_FORECAST']].rename(columns={'ADJUSTED_FORECAST': 'Adjusted'}),
+                                on=['WEEK', 'PRODUCT'],
+                                how='outer'
+                            ).fillna(0)
+                            comparison_df['Lead Time (weeks)'] = lead_time_weeks
+                            comparison_df['Difference'] = comparison_df['Adjusted'] - comparison_df['Original']
+                            comparison_df['% Change'] = ((comparison_df['Adjusted'] / comparison_df['Original']) - 1) * 100
+                            comparison_df['WEEK'] = pd.to_datetime(comparison_df['WEEK']).dt.strftime('%Y-%m-%d')
+                            comparison_df = comparison_df.round(2)
+                            comparison_df = comparison_df[['WEEK', 'PRODUCT', 'Lead Time (weeks)', 'Original', 'Adjusted', 'Difference', '% Change']]
+                            comparison_df.columns = ['Week', 'Product', 'Lead Time (weeks)', 'Original', 'Adjusted', 'Difference', '% Change']
+                        else:
+                            # Fallback if PRODUCT not available
+                            comparison_df = pd.merge(
+                                original_forecast[['WEEK', 'FORECAST']].rename(columns={'FORECAST': 'Original'}),
+                                adjusted_forecast[['WEEK', 'ADJUSTED_FORECAST']].rename(columns={'ADJUSTED_FORECAST': 'Adjusted'}),
+                                on='WEEK',
+                                how='outer'
+                            ).fillna(0)
+                            comparison_df['Lead Time (weeks)'] = lead_time_weeks
+                            comparison_df['Difference'] = comparison_df['Adjusted'] - comparison_df['Original']
+                            comparison_df['% Change'] = ((comparison_df['Adjusted'] / comparison_df['Original']) - 1) * 100
+                            comparison_df['WEEK'] = pd.to_datetime(comparison_df['WEEK']).dt.strftime('%Y-%m-%d')
+                            comparison_df = comparison_df.round(2)
+                            comparison_df = comparison_df[['WEEK', 'Lead Time (weeks)', 'Original', 'Adjusted', 'Difference', '% Change']]
+                            comparison_df.columns = ['Week', 'Lead Time (weeks)', 'Original', 'Adjusted', 'Difference', '% Change']
                         st.dataframe(comparison_df, use_container_width=True)
 
                         # Model performance metrics

@@ -220,18 +220,14 @@ def main():
             st.subheader("📝 Feature Descriptions")
             feature_descriptions = {
                 "WEEK": "The week of the observation (date or week number).",
-                "STORE": "Store identifier or name.",
-                "STORE_TYPE": "Type/category of the store.",
                 "PRODUCT": "Product identifier or name.",
                 "CATEGORY": "Product category.",
+                "MANUFACTURER": "Manufacturer of the product.",
+                "BRAND": "Brand of the product.",
+                "SUBCATEGORY": "Sub-category of the product.",
+                "SIZE": "Size of the product (if applicable).",
                 "UNITS": "Units sold during the week.",
-                "SALES": "Sales revenue for the week.",
-                "BASE_PRICE": "Standard price of the product.",
-                "PRICE": "Actual selling price during the week.",
                 "INVENTORY": "Inventory level at the start/end of the week.",
-                "FEATURE": "Whether the product was featured/promoted (binary/flag).",
-                "DISPLAY": "Whether the product was on display (binary/flag).",
-                "VISITS": "Number of customer visits."
             }
             feature_table = pd.DataFrame({
                 "Feature": df.columns,
@@ -268,7 +264,7 @@ def main():
             st.sidebar.markdown("Select the model type for forecasting. Random Forest is generally more robust, while Linear Regression is simpler and faster.")
 
             # Target variable selection
-            target_options = ['UNITS', 'SALES', 'INVENTORY']
+            target_options = ['UNITS', 'INVENTORY']
             target_col = st.sidebar.selectbox("Select Target Variable", target_options)
             
             # Forecasting horizon
@@ -677,26 +673,26 @@ def main():
                             comparison_df.columns = ['Week', 'Lead Time (weeks)', 'Original', 'Adjusted', 'Difference', '% Change']
                         st.dataframe(comparison_df, use_container_width=True)
 
-                        # Model performance metrics
-                    if historical_data is not None:
-                        st.header("🎯 Model Performance")
-                        mae = mean_absolute_error(historical_data['ACTUAL'], historical_data['FORECAST'])
-                        rmse = np.sqrt(mean_squared_error(historical_data['ACTUAL'], historical_data['FORECAST']))
-                        mape_data = historical_data[historical_data['ACTUAL'] != 0]
-                        if not mape_data.empty:
-                            mape = np.mean(np.abs((mape_data['ACTUAL'] - mape_data['FORECAST']) / mape_data['ACTUAL'])) * 100
-                        else:
-                            mape = np.nan
+                    # Model performance metrics
+                    #if historical_data is not None:
+                        #st.header("🎯 Model Performance")
+                        #mae = mean_absolute_error(historical_data['ACTUAL'], historical_data['FORECAST'])
+                        #rmse = np.sqrt(mean_squared_error(historical_data['ACTUAL'], historical_data['FORECAST']))
+                        #mape_data = historical_data[historical_data['ACTUAL'] != 0]
+                        #if not mape_data.empty:
+                            #mape = np.mean(np.abs((mape_data['ACTUAL'] - mape_data['FORECAST']) / mape_data['ACTUAL'])) * 100
+                        #else:
+                            #mape = np.nan
 
-                        perf_col1, perf_col2, perf_col3 = st.columns(3)
-                        with perf_col1:
-                            st.metric("Mean Absolute Error", f"{mae:.2f}")
-                        with perf_col2:
-                            st.metric("Root Mean Square Error", f"{rmse:.2f}")
-                        with perf_col3:
-                            st.metric("Mean Absolute % Error", f"{mape:.3f}%" if not np.isnan(mape) else "N/A")
-                    else:
-                        st.error("Unable to generate forecasts. Please check your data quality and try again.")
+                        #perf_col1, perf_col2, perf_col3 = st.columns(3)
+                        #with perf_col1:
+                            #st.metric("Mean Absolute Error", f"{mae:.2f}")
+                        #with perf_col2:
+                            #st.metric("Root Mean Square Error", f"{rmse:.2f}")
+                        #with perf_col3:
+                            #st.metric("Mean Absolute % Error", f"{mape:.3f}%" if not np.isnan(mape) else "N/A")
+                else:
+                    st.error("Unable to generate forecasts. Please check your data quality and try again.")
         
         except Exception as e:
             st.error(f"Error processing file: {str(e)}")

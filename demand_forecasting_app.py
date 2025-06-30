@@ -125,7 +125,12 @@ class DemandForecaster:
             self.model = LinearRegression()
             self.model.fit(X_train_scaled, y_train)
         else:
-            self.model = RandomForestRegressor(n_estimators=100, random_state=42)
+            self.model = RandomForestRegressor(
+                n_estimators=375,
+                random_state=42,
+                max_depth=10,
+                min_samples_split=10
+                )
             self.model.fit(X_train, y_train)
 
         # Generate forecasts
@@ -516,6 +521,14 @@ def main():
                         st.plotly_chart(historical_fig, use_container_width=True)
                                             
                     with col2:
+                        original_display_plot = original_display.copy()
+                        adjusted_display_plot = adjusted_display.copy()
+
+                        if 'FORECAST' in original_display_plot.columns:
+                            original_display_plot['FORECAST'] = np.ceil(original_display_plot['FORECAST']).astype(int)
+                        if 'ADJUSTED_FORECAST' in adjusted_display_plot.columns:
+                            adjusted_display_plot['ADJUSTED_FORECAST'] = np.ceil(adjusted_display_plot['ADJUSTED_FORECAST']).astype(int)
+
                         st.subheader("📈 Original vs Adjusted Forecasts")
 
                         forecast_fig = go.Figure()
@@ -523,8 +536,8 @@ def main():
                         # Add original forecast
                         if chart_type == "Line Chart":
                             forecast_fig.add_trace(go.Scatter(
-                                x=original_display[x_col],
-                                y=original_display['FORECAST'] if 'FORECAST' in original_display else original_display['ADJUSTED_FORECAST'],
+                                x=original_display_plot[x_col],
+                                y=original_display_plot['FORECAST'] if 'FORECAST' in original_display_plot else original_display_plot['ADJUSTED_FORECAST'],
                                 mode='lines+markers',
                                 name='Original Forecast',
                                 line=dict(color='blue', width=3),
@@ -534,8 +547,8 @@ def main():
                         
                             # Add adjusted forecast
                             forecast_fig.add_trace(go.Scatter(
-                                x=adjusted_display[x_col],
-                                y=adjusted_display['ADJUSTED_FORECAST'] if 'ADJUSTED_FORECAST' in adjusted_display else adjusted_display['FORECAST'],
+                                x=adjusted_display_plot[x_col],
+                                y=adjusted_display_plot['ADJUSTED_FORECAST'] if 'ADJUSTED_FORECAST' in adjusted_display_plot else adjusted_display_plot['FORECAST'],
                                 mode='lines+markers',
                                 name='Adjusted Forecast (Lead Time + Buffer)',
                                 line=dict(color='red', width=3, dash='dash'),
@@ -544,16 +557,16 @@ def main():
 
                         elif chart_type == "Bar Chart":
                             forecast_fig.add_trace(go.Bar(
-                                x=original_display[x_col],
-                                y=original_display['FORECAST'] if 'FORECAST' in original_display else original_display['ADJUSTED_FORECAST'],
+                                x=original_display_plot[x_col],
+                                y=original_display_plot['FORECAST'] if 'FORECAST' in original_display_plot else original_display_plot['ADJUSTED_FORECAST'],
                                 name='Original Forecast',
                                 marker_color='blue',
                                 opacity=0.7
                             ))
 
                             forecast_fig.add_trace(go.Bar(
-                                x=adjusted_display[x_col],
-                                y=adjusted_display['ADJUSTED_FORECAST'] if 'ADJUSTED_FORECAST' in adjusted_display else adjusted_display['FORECAST'],
+                                x=adjusted_display_plot[x_col],
+                                y=adjusted_display_plot['ADJUSTED_FORECAST'] if 'ADJUSTED_FORECAST' in adjusted_display_plot else adjusted_display_plot['FORECAST'],
                                 name='Adjusted Forecast (Lead Time + Buffer)',
                                 marker_color='red',
                                 opacity=0.7

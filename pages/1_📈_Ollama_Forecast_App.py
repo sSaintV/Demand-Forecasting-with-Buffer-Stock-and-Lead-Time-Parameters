@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-import subprocess
 import re
 from datetime import timedelta
+import ollama
 
 st.set_page_config(layout="wide")
 
@@ -51,12 +51,14 @@ Replace [unit] with the forecasted value for each week. After the table, provide
 """
 
 def run_ollama_forecast(prompt, model="llama3"):
-    result = subprocess.run(
-        ['ollama', 'run', model],
-        input=prompt.encode('utf-8'),
-        capture_output=True
-    )
-    return result.stdout.decode('utf-8')
+    # Use the ollama Python package instead of subprocess
+    response = ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])
+    # The response is a dict with a 'message' key containing another dict with 'content'
+    return response['message']['content']
+
+@st.cache_data(show_spinner=False)
+def cached_llm_response(prompt, model="llama3"):
+    return run_ollama_forecast(prompt, model)
 
 def parse_forecast(output):
     numbers = re.findall(r'\d+', output)

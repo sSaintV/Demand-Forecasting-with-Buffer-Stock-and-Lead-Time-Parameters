@@ -35,11 +35,11 @@ def generate_prompt(weeks, units, label, future_weeks):
     header = f"| Product ID | Units(DF) | {date_cols} |"
     sep = "|" + "-----------|" * (2 + len(future_weeks))
     row = f"| {label} |           | {' | '.join(['[unit]']*len(future_weeks))} |"
-    return f"""You are a demand forecasting expert. Analyze the following weekly sales for product ID {label}:
+    return f"""You are a demand forecasting expert. Analyze the following weekly units for product ID {label}:
 
 {history}
 
-Please forecast the next {len(future_weeks)} weeks of unit sales using a robust time series model (such as ARIMA, Prophet, or Exponential Smoothing), considering seasonality, trends, and any anomalies.
+Please forecast the next {len(future_weeks)} weeks of units using a robust time series model (such as ARIMA, Prophet, or Exponential Smoothing), considering seasonality, trends, and any anomalies.
 
 Return the forecast as a markdown table in this format, with the forecasted week dates as columns and a single row for the forecasted units for product {label}:
 

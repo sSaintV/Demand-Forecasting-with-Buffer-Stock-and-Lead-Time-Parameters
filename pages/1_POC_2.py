@@ -143,7 +143,7 @@ if uploaded_file:
                 ax_hist.plot(sub_df['WEEK'], sub_df['UNITS'], label='Historical', color='blue')
                 ax_hist.set_xlabel("Date")
                 ax_hist.set_ylabel("Units")
-                ax_hist.set_title(f"Product {selected_group} - Historical Sales")
+                ax_hist.set_title(f"Product {selected_group} - Historical Units")
                 ax_hist.legend()
                 st.pyplot(fig_hist)
 
@@ -154,7 +154,7 @@ if uploaded_file:
                 ax_forecast.plot(result["future_weeks"], result["forecast"], label='Forecast', color='orange', linestyle='--', marker='o')
                 ax_forecast.set_xlabel("Date")
                 ax_forecast.set_ylabel("Units")
-                ax_forecast.set_title(f"Product {selected_group} - Forecasted Sales")
+                ax_forecast.set_title(f"Product {selected_group} - Forecasted Units")
                 ax_forecast.legend()
                 st.pyplot(fig_forecast)
 

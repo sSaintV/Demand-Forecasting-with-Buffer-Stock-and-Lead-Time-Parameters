@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import re
 from datetime import timedelta
 import ollama
+import io
 
 st.set_page_config(layout="wide")
 
@@ -61,11 +62,34 @@ def cached_llm_response(prompt, model="llama3"):
     return run_ollama_forecast(prompt, model)
 
 def parse_forecast(output):
-    numbers = re.findall(r'\d+', output)
-    forecast = list(map(int, numbers[:12]))
-    if len(forecast) < 12:
-        forecast += [forecast[-1]] * (12 - len(forecast))
-    insights = "\n".join(output.split("\n")[1:])
+    # Find the markdown table in the output
+    lines = output.split('\n')
+    table_lines = []
+    in_table = False
+    for line in lines:
+        if line.strip().startswith('|') and '|' in line[1:]:
+            table_lines.append(line)
+            in_table = True
+        elif in_table and not line.strip().startswith('|'):
+            break
+    if not table_lines:
+        # fallback to old method if no table found
+        numbers = re.findall(r'\d+', output)
+        forecast = list(map(int, numbers[:12]))
+        if len(forecast) < 12:
+            forecast += [forecast[-1]] * (12 - len(forecast))
+        insights = "\n".join(output.split("\n")[1:])
+        return forecast, insights
+
+    # Convert markdown table to CSV-like string
+    table_str = '\n'.join([l.strip().strip('|').replace(' | ', ',') for l in table_lines])
+    df = pd.read_csv(io.StringIO(table_str), header=0)
+    # The forecasted units are in the first row after the first two columns
+    # Ensure forecasted units are whole numbers (integers, rounded up if needed)
+    forecast = df.iloc[0, 2:].apply(lambda x: int(round(float(x)))).tolist()
+    # Insights: everything after the table
+    table_end_idx = lines.index(table_lines[-1])
+    insights = "\n".join(lines[table_end_idx+1:]).strip()
     return forecast, insights
 
 def build_chat_prompt(user_input, sub_df, future_weeks, forecast):

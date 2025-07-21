@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import re
 from datetime import timedelta
 import ollama
+import io
+import base64
 
 st.set_page_config(layout="wide")
 
@@ -40,6 +42,8 @@ def generate_prompt(weeks, units, label, future_weeks):
 {history}
 
 Please forecast the next {len(future_weeks)} weeks of units using a robust time series model (such as ARIMA, Prophet, or Exponential Smoothing), while also incorporating ML Algorithms (such as XGBoost or Extra Trees) for better accuracy. Consider seasonality, trends, and any anomalies in the data.
+
+
 
 Return the forecast as a markdown table in this format, with the forecasted week dates as columns and a single row for the forecasted units for product {label}:
 
@@ -196,64 +200,78 @@ if uploaded_file:
                 ax_hist.plot(sub_df['WEEK'], sub_df['UNITS'], label='Historical', color='blue')
                 ax_hist.set_ylabel("Units")
                 ax_hist.set_title(f"Product {selected_group} - Historical Units")
-
-                # Set x-axis by quarter, showing all quarters from first to last record
-                weeks = pd.Series(sub_df['WEEK'].unique())
-                if not weeks.empty:
-                    # Find the first and last week
-                    start = weeks.min()
-                    end = weeks.max()
-                    # Generate quarter start dates from start to end
+                # Set x-axis to quarters
+                all_weeks = pd.Series(sub_df['WEEK'].unique())
+                if not all_weeks.empty:
+                    start = all_weeks.min()
+                    end = all_weeks.max()
                     quarter_starts = pd.date_range(
-                        start=start.to_period('Q').start_time, 
-                        end=end.to_period('Q').end_time, 
+                        start=start.to_period('Q').start_time,
+                        end=end.to_period('Q').end_time,
                         freq='QS'
                     )
-                    # Set ticks at quarter starts, label as Q{quarter} {year}
                     ax_hist.set_xticks(quarter_starts)
                     ax_hist.set_xticklabels([f"Q{q.quarter} {q.year}" for q in quarter_starts], rotation=45, ha='right')
                     ax_hist.set_xlabel("Quarter")
                 else:
                     ax_hist.set_xlabel("Quarter")
-
-                # --- Get y-limits for matching ---
-                y_min = min(sub_df['UNITS'].min(), min(result["forecast"]))
-                y_max = max(sub_df['UNITS'].max(), max(result["forecast"]))
+                # Set y-axis from 5000 to 0, decrement by 500
+                y_max = 5000
+                y_min = 0
                 ax_hist.set_ylim(y_min, y_max)
-
+                ax_hist.set_yticks(list(range(y_max, y_min - 1, -500)))
                 ax_hist.legend()
                 st.pyplot(fig_hist)
+                # --- Download button for historical chart ---
+                buf_hist = io.BytesIO()
+                fig_hist.savefig(buf_hist, format="png")
+                st.download_button(
+                    label="Download Historical Chart (PNG)",
+                    data=buf_hist.getvalue(),
+                    file_name=f"historical_chart_{selected_group}.png",
+                    mime="image/png"
+                )
 
             # Forecasted Data Chart
             with col_chart_forecast:
                 st.subheader("Forecasted Data")
                 fig_forecast, ax_forecast = plt.subplots(figsize=(6, 4))
                 ax_forecast.plot(result["future_weeks"], result["forecast"], label='Forecast', color='orange', linestyle='--', marker='o')
-                # Set x-axis by month
-                future_weeks = pd.Series(result["future_weeks"])
-                month_starts = future_weeks[future_weeks.dt.is_month_start]
-                if not month_starts.empty:
-                    ax_forecast.set_xticks(month_starts)
-                    ax_forecast.set_xticklabels([q.strftime("%b %Y") for q in month_starts], rotation=45, ha='right')
-                else:
-                    fallback_ticks = future_weeks[::4]
-                    ax_forecast.set_xticks(fallback_ticks)
-                    ax_forecast.set_xticklabels([q.strftime("%b %Y") for q in fallback_ticks], rotation=45, ha='right')
-                ax_forecast.set_xlabel("Month")
-                ax_forecast.set_ylabel("Units")
-                ax_forecast.set_title(f"Product {selected_group} - Forecasted Units")
-                # --- Set y-limits to match historical chart ---
+                # ...existing code for x-axis...
                 ax_forecast.set_ylim(y_min, y_max)
                 ax_forecast.legend()
                 st.pyplot(fig_forecast)
+                # --- Download button for forecast chart ---
+                buf_forecast = io.BytesIO()
+                fig_forecast.savefig(buf_forecast, format="png")
+                st.download_button(
+                    label="Download Forecast Chart (PNG)",
+                    data=buf_forecast.getvalue(),
+                    file_name=f"forecast_chart_{selected_group}.png",
+                    mime="image/png"
+                )
 
             st.markdown("---")
             st.subheader("Forecast Insights")
             st.markdown("**Forecast Table:**")
             st.markdown(markdown_table)
+            # --- Download button for markdown table as CSV ---
+            if markdown_table:
+                table_lines = [line for line in markdown_table.split('\n') if line.strip().startswith('|')]
+                if len(table_lines) >= 2:
+                    # Remove separator line
+                    table_lines = [table_lines[0]] + [l for l in table_lines[1:] if not set(l.replace('|', '').replace('-', '').strip()) == set()]
+                    csv_str = "\n".join([",".join([cell.strip() for cell in row.strip('|').split('|')]) for row in table_lines])
+                    st.download_button(
+                        label="Download Forecast Table (CSV)",
+                        data=csv_str,
+                        file_name=f"forecast_table_{selected_group}.csv",
+                        mime="text/csv"
+                    )
             st.markdown("**Insights:**")
             st.markdown(insights)
 
+            # --- Chat Section (below insights) ---
             st.markdown("---")
             st.subheader("💬 Chat with Llama 3")
             if "chat_history" not in st.session_state:
@@ -281,7 +299,6 @@ if uploaded_file:
 
     elif mode == "Multiple Products":
         selected_products = st.multiselect("Select one or more Product IDs to forecast:", sorted(df['PRODUCT'].unique()))
-        # Store results in session_state to persist after button click
         if "multiple_products_results" not in st.session_state:
             st.session_state["multiple_products_results"] = None
 
@@ -289,7 +306,7 @@ if uploaded_file:
             results = []
             with st.spinner("Running forecasts for selected product IDs..."):
                 last_week = weekly_df['WEEK'].max()
-                for pid in sorted(selected_products):  # sort for lowest ID first
+                for pid in sorted(selected_products):
                     sub_df = weekly_df[weekly_df['PRODUCT'] == pid]
                     recent_data = sub_df[-52:]
                     prompt = generate_prompt(recent_data['WEEK'], recent_data['UNITS'], pid, [last_week + timedelta(weeks=i) for i in range(1, 13)])
@@ -299,7 +316,6 @@ if uploaded_file:
                     results.append((pid, sub_df, future_weeks, forecast, markdown_table, insights))
             st.session_state["multiple_products_results"] = results
 
-        # Use results from session_state if available
         results = st.session_state.get("multiple_products_results", [])
 
         if results:
@@ -334,6 +350,15 @@ if uploaded_file:
                 ax_hist.set_ylim(y_min, y_max)
                 ax_hist.legend()
                 st.pyplot(fig_hist)
+                # --- Download button for historical chart ---
+                buf_hist = io.BytesIO()
+                fig_hist.savefig(buf_hist, format="png")
+                st.download_button(
+                    label="Download Historical Chart (PNG)",
+                    data=buf_hist.getvalue(),
+                    file_name="historical_chart_multiple_products.png",
+                    mime="image/png"
+                )
 
             with col_chart_forecast:
                 fig_forecast, ax_forecast = plt.subplots(figsize=(12, 5))
@@ -354,55 +379,75 @@ if uploaded_file:
                 ax_forecast.set_ylim(y_min, y_max)
                 ax_forecast.legend()
                 st.pyplot(fig_forecast)
+                # --- Download button for forecast chart ---
+                buf_forecast = io.BytesIO()
+                fig_forecast.savefig(buf_forecast, format="png")
+                st.download_button(
+                    label="Download Forecast Chart (PNG)",
+                    data=buf_forecast.getvalue(),
+                    file_name="forecast_chart_multiple_products.png",
+                    mime="image/png"
+                )
 
             for pid, _, _, _, markdown_table, insights in results:
                 st.markdown(f"---\n### Product {pid} Forecast Insights")
                 if markdown_table:
                     st.markdown("**Forecast Table:**")
                     st.markdown(markdown_table)
+                    # --- Download button for markdown table as CSV ---
+                    table_lines = [line for line in markdown_table.split('\n') if line.strip().startswith('|')]
+                    if len(table_lines) >= 2:
+                        table_lines = [table_lines[0]] + [l for l in table_lines[1:] if not set(l.replace('|', '').replace('-', '').strip()) == set()]
+                        csv_str = "\n".join([",".join([cell.strip() for cell in row.strip('|').split('|')]) for row in table_lines])
+                        st.download_button(
+                            label=f"Download Forecast Table for {pid} (CSV)",
+                            data=csv_str,
+                            file_name=f"forecast_table_{pid}.csv",
+                            mime="text/csv"
+                        )
                 st.markdown("**Insights:**")
                 st.markdown(insights)
+
+            # --- Chat Section for Multiple Products ---
+            st.markdown("---")
+            st.subheader("💬 Chat with Llama 3 about Selected Products")
+            chat_key = "chat_history_multiple_products"
+            if chat_key not in st.session_state:
+                st.session_state[chat_key] = []
+
+            for msg in st.session_state[chat_key]:
+                st.chat_message(msg["role"]).write(msg["content"])
+
+            user_input = st.chat_input("Ask about any of the selected products...", key="chat_input_multiple_products")
+
+            if user_input and results:
+                st.session_state[chat_key].append({"role": "user", "content": user_input})
+                st.chat_message("user").write(user_input)
+
+                combined_histories = []
+                combined_forecasts = []
+                for pid, sub_df, future_weeks, forecast, _, _ in results:
+                    hist = "\n".join([f"{w.date()}: {int(u)} units" for w, u in zip(sub_df['WEEK'][-8:], sub_df['UNITS'][-8:])])
+                    fut = "\n".join([f"{w.date()}: {int(u)} units (forecast)" for w, u in zip(future_weeks, forecast)])
+                    combined_histories.append(f"Product {pid}:\n{hist}")
+                    combined_forecasts.append(f"Product {pid}:\n{fut}")
+                chat_prompt = (
+                    "You are a demand forecasting assistant. Here is the recent historical data for the selected products:\n"
+                    + "\n\n".join(combined_histories)
+                    + "\n\nAnd here are the forecasts for the next 12 weeks:\n"
+                    + "\n\n".join(combined_forecasts)
+                    + f"\n\nUser question: {user_input}\nPlease answer using the data above."
+                )
+
+                with st.spinner("Llama 3 is thinking..."):
+                    response = cached_llm_response(chat_prompt)
+                st.session_state[chat_key].append({"role": "assistant", "content": response})
+                st.chat_message("assistant").write(response)
         else:
             st.info("No forecasts to display. Please select products and run the forecast.")
 
-        # --- Chat Section (persists after forecast) ---
-        st.markdown("---")
-        st.subheader("💬 Chat with Llama 3 about All Selected Products")
-        chat_key = "chat_history_multiple_products"
-        if chat_key not in st.session_state:
-            st.session_state[chat_key] = []
-
-        for msg in st.session_state[chat_key]:
-            st.chat_message(msg["role"]).write(msg["content"])
-
-        user_input = st.chat_input("Ask about any of the selected products...", key="chat_input_multiple_products")
-
-        if user_input and results:
-            st.session_state[chat_key].append({"role": "user", "content": user_input})
-            st.chat_message("user").write(user_input)
-
-            combined_histories = []
-            combined_forecasts = []
-            for pid, sub_df, future_weeks, forecast, _, _ in results:
-                hist = "\n".join([f"{w.date()}: {int(u)} units" for w, u in zip(sub_df['WEEK'][-8:], sub_df['UNITS'][-8:])])
-                fut = "\n".join([f"{w.date()}: {int(u)} units (forecast)" for w, u in zip(future_weeks, forecast)])
-                combined_histories.append(f"Product {pid}:\n{hist}")
-                combined_forecasts.append(f"Product {pid}:\n{fut}")
-            chat_prompt = (
-                "You are a demand forecasting assistant. Here is the recent historical data for the selected products:\n"
-                + "\n\n".join(combined_histories)
-                + "\n\nAnd here are the forecasts for the next 12 weeks:\n"
-                + "\n\n".join(combined_forecasts)
-                + f"\n\nUser question: {user_input}\nPlease answer using the data above."
-            )
-
-            with st.spinner("Llama 3 is thinking..."):
-                response = cached_llm_response(chat_prompt)
-            st.session_state[chat_key].append({"role": "assistant", "content": response})
-            st.chat_message("assistant").write(response)
 
     elif mode == "All Products":
-        combine_chart = st.checkbox("Combine forecasts into one chart", value=True)
 
         if st.button("Run Forecast for All Products"):
             results = []
@@ -418,67 +463,94 @@ if uploaded_file:
                     results.append((pid, sub_df, future_weeks, forecast, markdown_table, insights))
             st.session_state["all_products_results"] = results
 
-        # Use results from session_state if available
         results = st.session_state.get("all_products_results", [])
 
+        col_chart_hist, col_chart_forecast = st.columns([1, 1])
+
         if results:
-            # --- Combined Historical Data Chart ---
-            st.subheader("Historical Data (All Products)")
-            fig_hist, ax_hist = plt.subplots(figsize=(12, 5))
-            for pid, sub_df, _, _, _, _ in results:
-                ax_hist.plot(sub_df['WEEK'], sub_df['UNITS'], label=f'{pid} - Historical')
-            ax_hist.set_ylabel("Units")
-            ax_hist.set_title("Historical Units (All Products)")
-            all_weeks = pd.Series(weekly_df['WEEK'].unique())
-            if not all_weeks.empty:
-                start = all_weeks.min()
-                end = all_weeks.max()
-                quarter_starts = pd.date_range(
-                    start=start.to_period('Q').start_time,
-                    end=end.to_period('Q').end_time,
-                    freq='QS'
+            with col_chart_hist:
+                st.subheader("Historical Data (All Products)")
+                fig_hist, ax_hist = plt.subplots(figsize=(12, 5))
+                for pid, sub_df, _, _, _, _ in results:
+                    ax_hist.plot(sub_df['WEEK'], sub_df['UNITS'], label=f'{pid} - Historical')
+                all_weeks = pd.Series(weekly_df['WEEK'].unique())
+                if not all_weeks.empty:
+                    start = all_weeks.min()
+                    end = all_weeks.max()
+                    quarter_starts = pd.date_range(
+                        start=start.to_period('Q').start_time,
+                        end=end.to_period('Q').end_time,
+                        freq='QS'
+                    )
+                    ax_hist.set_xticks(quarter_starts)
+                    ax_hist.set_xticklabels([f"Q{q.quarter} {q.year}" for q in quarter_starts], rotation=45, ha='right')
+                    ax_hist.set_xlabel("Quarter")
+                else:
+                    ax_hist.set_xlabel("Quarter")
+                all_units = weekly_df['UNITS'].values
+                all_forecasts = [unit for _, _, _, forecast, _, _ in results for unit in forecast]
+                y_min = min(all_units.min(), min(all_forecasts))
+                y_max = max(all_units.max(), max(all_forecasts))
+                ax_hist.set_ylim(y_min, y_max)
+                ax_hist.legend()
+                st.pyplot(fig_hist)
+                # --- Download button for historical chart ---
+                buf_hist = io.BytesIO()
+                fig_hist.savefig(buf_hist, format="png")
+                st.download_button(
+                    label="Download Historical Chart (PNG)",
+                    data=buf_hist.getvalue(),
+                    file_name="historical_chart_all_products.png",
+                    mime="image/png"
                 )
-                ax_hist.set_xticks(quarter_starts)
-                ax_hist.set_xticklabels([f"Q{q.quarter} {q.year}" for q in quarter_starts], rotation=45, ha='right')
-                ax_hist.set_xlabel("Quarter")
-            else:
-                ax_hist.set_xlabel("Quarter")
-            all_units = weekly_df['UNITS'].values
-            all_forecasts = [unit for _, _, _, forecast, _, _ in results for unit in forecast]
-            y_min = min(all_units.min(), min(all_forecasts))
-            y_max = max(all_units.max(), max(all_forecasts))
-            ax_hist.set_ylim(y_min, y_max)
-            ax_hist.legend()
-            st.pyplot(fig_hist)
 
-            # --- Combined Forecasted Data Chart ---
-            st.subheader("Forecasted Data (All Products)")
-            fig_forecast, ax_forecast = plt.subplots(figsize=(12, 5))
-            for pid, _, future_weeks, forecast, _, _ in results:
-                ax_forecast.plot(future_weeks, forecast, label=f'{pid} - Forecast', linestyle='--', marker='o')
-            all_future_weeks = pd.Series([w for _, _, future_weeks, _, _, _ in results for w in future_weeks])
-            month_starts = all_future_weeks[all_future_weeks.dt.is_month_start].drop_duplicates()
-            if not month_starts.empty:
-                ax_forecast.set_xticks(month_starts)
-                ax_forecast.set_xticklabels([q.strftime("%b %Y") for q in month_starts], rotation=45, ha='right')
-            else:
-                fallback_ticks = all_future_weeks[::4].drop_duplicates()
-                ax_forecast.set_xticks(fallback_ticks)
-                ax_forecast.set_xticklabels([q.strftime("%b %Y") for q in fallback_ticks], rotation=45, ha='right')
-            ax_forecast.set_xlabel("Month")
-            ax_forecast.set_ylabel("Units")
-            ax_forecast.set_title("Forecasted Units (All Products)")
-            ax_forecast.set_ylim(y_min, y_max)
-            ax_forecast.legend()
-            st.pyplot(fig_forecast)
+            with col_chart_forecast:
+                st.subheader("Forecasted Data (All Products)")
+                fig_forecast, ax_forecast = plt.subplots(figsize=(12, 5))
+                for pid, _, future_weeks, forecast, _, _ in results:
+                    ax_forecast.plot(future_weeks, forecast, label=f'{pid} - Forecast', linestyle='--', marker='o')
+                all_future_weeks = pd.Series([w for _, _, future_weeks, _, _, _ in results for w in future_weeks])
+                month_starts = all_future_weeks[all_future_weeks.dt.is_month_start].drop_duplicates()
+                if not month_starts.empty:
+                    ax_forecast.set_xticks(month_starts)
+                    ax_forecast.set_xticklabels([q.strftime("%b %Y") for q in month_starts], rotation=45, ha='right')
+                else:
+                    fallback_ticks = all_future_weeks[::4].drop_duplicates()
+                    ax_forecast.set_xticks(fallback_ticks)
+                    ax_forecast.set_xticklabels([q.strftime("%b %Y") for q in fallback_ticks], rotation=45, ha='right')
+                ax_forecast.set_xlabel("Month")
+                ax_forecast.set_ylabel("Units")
+                ax_forecast.set_title("Forecasted Units (All Products)")
+                ax_forecast.set_ylim(y_min, y_max)
+                ax_forecast.legend()
+                st.pyplot(fig_forecast)
+                # --- Download button for forecast chart ---
+                buf_forecast = io.BytesIO()
+                fig_forecast.savefig(buf_forecast, format="png")
+                st.download_button(
+                    label="Download Forecast Chart (PNG)",
+                    data=buf_forecast.getvalue(),
+                    file_name="forecast_chart_all_products.png",
+                    mime="image/png"
+                )
 
-            # --- Per-product Insights ---
             for pid, sub_df, future_weeks, forecast, markdown_table, insights in results:
                 st.markdown(f"---\n### Product {pid}")
                 st.subheader("Forecast Insights")
                 if markdown_table:
                     st.markdown("**Forecast Table:**")
                     st.markdown(markdown_table)
+                    # --- Download button for markdown table as CSV ---
+                    table_lines = [line for line in markdown_table.split('\n') if line.strip().startswith('|')]
+                    if len(table_lines) >= 2:
+                        table_lines = [table_lines[0]] + [l for l in table_lines[1:] if not set(l.replace('|', '').replace('-', '').strip()) == set()]
+                        csv_str = "\n".join([",".join([cell.strip() for cell in row.strip('|').split('|')]) for row in table_lines])
+                        st.download_button(
+                            label=f"Download Forecast Table for {pid} (CSV)",
+                            data=csv_str,
+                            file_name=f"forecast_table_{pid}.csv",
+                            mime="text/csv"
+                        )
                 st.markdown("**Insights:**")
                 st.markdown(insights)
         else:

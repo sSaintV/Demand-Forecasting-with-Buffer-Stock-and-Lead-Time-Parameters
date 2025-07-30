@@ -21,6 +21,40 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+
+def edit_historical_data(df):
+    st.sidebar.header("✏️ Edit Historical Data")
+    # Dropdown for field selection
+    field = st.sidebar.selectbox("Select Field to Edit", df.columns.tolist())
+    # Dropdown for SKU/Product selection (if exists)
+    sku_col = None
+    for col in ["PRODUCT", "SKU", "ITEM"]:
+        if col in df.columns:
+            sku_col = col
+            break
+    sku_val = None
+    if sku_col:
+        sku_val = st.sidebar.selectbox(f"Select {sku_col}", sorted(df[sku_col].astype(str).unique()))
+    # Date picker for week selection
+    date_val = st.sidebar.selectbox(
+        "Select Date (WEEK)",
+        sorted(df["WEEK"].dt.strftime("%Y-%m-%d").unique())
+    )
+    # Current value
+    mask = (df["WEEK"].dt.strftime("%Y-%m-%d") == date_val)
+    if sku_col and sku_val is not None:
+        mask &= (df[sku_col].astype(str) == sku_val)
+    current_val = df.loc[mask, field].iloc[0] if mask.any() else None
+    new_val = st.sidebar.number_input(
+        f"Set new value for {field} on {date_val}" + (f" ({sku_col}: {sku_val})" if sku_col else ""),
+        value=float(current_val) if current_val is not None and pd.api.types.is_numeric_dtype(df[field]) else 0.0
+    )
+    if st.sidebar.button("Apply Change"):
+        df.loc[mask, field] = new_val
+        st.sidebar.success(f"Updated {field} for {sku_col}: {sku_val} on {date_val} to {new_val}")
+        st.session_state["edited_df"] = df.copy()
+        st.rerun()
+
 # --- POC_1 DemandForecaster Class ---
 class DemandForecaster:
     def __init__(self):
@@ -183,19 +217,58 @@ class DemandForecaster:
         adjusted_forecast["TYPE"] = "Adjusted"
         
         return adjusted_forecast
+    
+    def edit_historical_data(df):
+        st.sidebar.header("✏️ Edit Historical Data")
+        # Dropdown for field selection
+        field = st.sidebar.selectbox("Select Field to Edit", df.columns.tolist())
+        # Dropdown for SKU/Product selection (if exists)
+        sku_col = None
+        for col in ["PRODUCT", "SKU", "ITEM"]:
+            if col in df.columns:
+                sku_col = col
+                break
+        sku_val = None
+        if sku_col:
+            sku_val = st.sidebar.selectbox(f"Select {sku_col}", sorted(df[sku_col].astype(str).unique()))
+        # Date picker for week selection
+        date_val = st.sidebar.selectbox(
+            "Select Date (WEEK)",
+            sorted(df["WEEK"].dt.strftime("%Y-%m-%d").unique())
+        )
+        # Current value
+        mask = (df["WEEK"].dt.strftime("%Y-%m-%d") == date_val)
+        if sku_col and sku_val is not None:
+            mask &= (df[sku_col].astype(str) == sku_val)
+        current_val = df.loc[mask, field].iloc[0] if mask.any() else None
+        new_val = st.sidebar.number_input(
+            f"Set new value for {field} on {date_val}" + (f" ({sku_col}: {sku_val})" if sku_col else ""),
+            value=float(current_val) if current_val is not None and pd.api.types.is_numeric_dtype(df[field]) else 0.0
+        )
+        if st.sidebar.button("Apply Change"):
+            df.loc[mask, field] = new_val
+            st.sidebar.success(f"Updated {field} for {sku_col}: {sku_val} on {date_val} to {new_val}")
+            st.session_state["edited_df"] = df.copy()
+            st.rerun()
 
 # --- Main Streamlit Application ---
 def main():
     st.title("📈 Demand Forecasting with AI Insights")
     st.markdown("### Upload your retail demand data and get ML-powered forecasts and AI insights.")
-    
+
     # Sidebar for file upload and parameters
     st.sidebar.header("📁 Data Upload")
     uploaded_file = st.sidebar.file_uploader("Choose a CSV file", type="csv")
-    
+
     if uploaded_file is not None:
         try:
             df = pd.read_csv(uploaded_file)
+            df["WEEK"] = pd.to_datetime(df["WEEK"])  # Ensure datetime for edit function
+
+            # --- Add the edit function here ---
+            if "edited_df" in st.session_state:
+                df = st.session_state["edited_df"]
+            edit_historical_data(df)
             
             st.subheader("📝 Feature Descriptions")
             feature_descriptions = {
@@ -413,6 +486,32 @@ def main():
                     
                     col1, col2 = st.columns(2)
                     
+                    # --- Prepare display plots and y-axis range before both charts ---
+                    original_display_plot = original_display.copy()
+                    adjusted_display_plot = adjusted_display.copy()
+
+                    if "FORECAST" in original_display_plot.columns:
+                        original_display_plot["FORECAST"] = np.ceil(original_display_plot["FORECAST"]).astype(int)
+                    if "ADJUSTED_FORECAST" in adjusted_display_plot.columns:
+                        adjusted_display_plot["ADJUSTED_FORECAST"] = np.ceil(adjusted_display_plot["ADJUSTED_FORECAST"]).astype(int)
+
+                    # Collect y-values from both historical and forecast for shared axis
+                    y_values = []
+                    if historical_data is not None:
+                        y_values.extend(historical_data["ACTUAL"].values)
+                    if "FORECAST" in original_display_plot.columns:
+                        y_values.extend(original_display_plot["FORECAST"].values)
+                    if "ADJUSTED_FORECAST" in adjusted_display_plot.columns:
+                        y_values.extend(adjusted_display_plot["ADJUSTED_FORECAST"].values)
+                    y_values = [v for v in y_values if pd.notnull(v)]
+                    if y_values:
+                        y_min = int(np.floor(min(y_values)))
+                        y_max = int(np.ceil(max(y_values)))
+                        if y_min == y_max:
+                            y_max = y_min + 1  # Ensure some range
+                    else:
+                        y_min, y_max = 0, 1
+
                     with col1:
                         st.subheader("📈 Historical Data")
                         
@@ -451,18 +550,11 @@ def main():
                             hovermode="x unified",
                             height=500
                         )
+                        historical_fig.update_yaxes(tickformat="d", range=[y_min, y_max])
 
                         st.plotly_chart(historical_fig, use_container_width=True)
                                             
                     with col2:
-                        original_display_plot = original_display.copy()
-                        adjusted_display_plot = adjusted_display.copy()
-
-                        if "FORECAST" in original_display_plot.columns:
-                            original_display_plot["FORECAST"] = np.ceil(original_display_plot["FORECAST"]).astype(int)
-                        if "ADJUSTED_FORECAST" in adjusted_display_plot.columns:
-                            adjusted_display_plot["ADJUSTED_FORECAST"] = np.ceil(adjusted_display_plot["ADJUSTED_FORECAST"]).astype(int)
-
                         st.subheader("📈 Original vs Adjusted Forecasts")
 
                         forecast_fig = go.Figure()
@@ -477,7 +569,6 @@ def main():
                                 marker=dict(size=6)
                             ))
 
-                        
                             forecast_fig.add_trace(go.Scatter(
                                 x=adjusted_display_plot[x_col],
                                 y=adjusted_display_plot["ADJUSTED_FORECAST"] if "ADJUSTED_FORECAST" in adjusted_display_plot else adjusted_display_plot["FORECAST"],
@@ -511,6 +602,7 @@ def main():
                             barmode="group",
                             height=500
                         )
+                        forecast_fig.update_yaxes(tickformat="d", range=[y_min, y_max])
 
                         st.plotly_chart(forecast_fig, use_container_width=True)
 

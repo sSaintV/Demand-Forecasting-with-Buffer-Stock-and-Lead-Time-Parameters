@@ -27,7 +27,7 @@ def edit_forecast_data(adjusted_forecast, forecast_range, df=None):
     # --- Field selection for editing ---
     edit_field = st.sidebar.selectbox(
         "Select Field to Edit",
-        options=["Unit", "BOH (Inventory)"],
+        options=["Unit", "Inventory"],
         index=0,
         key="simulator_field_select"
     )
@@ -57,12 +57,17 @@ def edit_forecast_data(adjusted_forecast, forecast_range, df=None):
         key=f"{key_prefix}_week_selectbox"
     )
 
-    # If PRODUCT exists, allow selection
+    # --- Filter product options by Product Filter in session_state ---
     product_val = None
     if "PRODUCT" in data_source.columns:
+        # Use the product filter from session_state if available
+        product_filter = st.session_state.get("chart_product_filter", None)
+        available_products = sorted(data_source["PRODUCT"].astype(str).unique())
+        if product_filter:
+            available_products = [p for p in available_products if p in product_filter]
         product_val = st.sidebar.selectbox(
             "Select Product",
-            sorted(data_source["PRODUCT"].astype(str).unique()),
+            available_products,
             key=f"{key_prefix}_product_selectbox"
         )
 
@@ -369,25 +374,10 @@ def main():
                         format="YYYY-MM-DD"
                     )
 
-                    # --- Product Filter for Charts ---
-                    product_filter = None
-                    if "PRODUCT" in df.columns:
-                        all_products = sorted(df["PRODUCT"].astype(str).unique())
-                        product_filter = st.sidebar.multiselect(
-                            "Filter Products for Chart Display",
-                            all_products,
-                            default=all_products,
-                            key="chart_product_filter"
-                        )
-                    else:
-                        product_filter = None
-
                     # --- Call edit_forecast_data here, after adjusted_forecast is defined and display_range is set ---
                     edit_forecast_data(adjusted_forecast, (display_range[0], display_range[1]), df=df)
 
                     inventory_change_table = None
-
-                    # --- REMOVE all logic for inventory_change_table and inventory number_input ---
 
                     original_forecast_display = original_forecast[
                         (original_forecast["WEEK"] >= display_range[0]) & (original_forecast["WEEK"] <= display_range[1])
@@ -408,8 +398,18 @@ def main():
                         adjusted_display["MONTH"] = pd.to_datetime(adjusted_display["WEEK"]).dt.to_period("M").dt.to_timestamp()
                         x_col = "MONTH"
                         x_title = "Month"
-                        original_display = original_display.groupby(x_col)["FORECAST"].sum().reset_index()
-                        adjusted_display = adjusted_display.groupby(x_col)["ADJUSTED_FORECAST"].sum().reset_index()
+                        # --- Group by both MONTH and PRODUCT if PRODUCT exists, else just MONTH ---
+                        if "PRODUCT" in original_display.columns:
+                            # Only aggregate columns that exist
+                            orig_agg = {col: "sum" for col in ["FORECAST"] if col in original_display.columns}
+                            adj_agg = {col: "sum" for col in ["ADJUSTED_FORECAST"] if col in adjusted_display.columns}
+                            original_display = original_display.groupby([x_col, "PRODUCT"], as_index=False).agg(orig_agg)
+                            adjusted_display = adjusted_display.groupby([x_col, "PRODUCT"], as_index=False).agg(adj_agg)
+                        else:
+                            if "FORECAST" in original_display.columns:
+                                original_display = original_display.groupby(x_col, as_index=False)["FORECAST"].sum()
+                            if "ADJUSTED_FORECAST" in adjusted_display.columns:
+                                adjusted_display = adjusted_display.groupby(x_col, as_index=False)["ADJUSTED_FORECAST"].sum()
                     elif forecast_periods == 52:
                         original_display = original_forecast_display.copy()
                         adjusted_display = adjusted_forecast_display.copy()
@@ -417,13 +417,50 @@ def main():
                         adjusted_display["QUARTER"] = pd.to_datetime(adjusted_display["WEEK"]).dt.to_period("Q").dt.to_timestamp()
                         x_col = "QUARTER"
                         x_title = "Quarter"
-                        original_display = original_display.groupby(x_col)["FORECAST"].sum().reset_index()
-                        adjusted_display = adjusted_display.groupby(x_col)["ADJUSTED_FORECAST"].sum().reset_index()
+                        if "PRODUCT" in original_display.columns:
+                            orig_agg = {col: "sum" for col in ["FORECAST"] if col in original_display.columns}
+                            adj_agg = {col: "sum" for col in ["ADJUSTED_FORECAST"] if col in adjusted_display.columns}
+                            original_display = original_display.groupby([x_col, "PRODUCT"], as_index=False).agg(orig_agg)
+                            adjusted_display = adjusted_display.groupby([x_col, "PRODUCT"], as_index=False).agg(adj_agg)
+                        else:
+                            if "FORECAST" in original_display.columns:
+                                original_display = original_display.groupby(x_col, as_index=False)["FORECAST"].sum()
+                            if "ADJUSTED_FORECAST" in adjusted_display.columns:
+                                adjusted_display = adjusted_display.groupby(x_col, as_index=False)["ADJUSTED_FORECAST"].sum()
                     else:
                         original_display = original_forecast_display.copy()
                         adjusted_display = adjusted_forecast_display.copy()
                         x_col = "WEEK"
                         x_title = "Week"
+
+                    # --- Product Filter for Charts ---
+                    product_filter = None
+                    if "PRODUCT" in df.columns:
+                        all_products = sorted(df["PRODUCT"].astype(str).unique())
+                        product_filter = st.sidebar.multiselect(
+                            "Filter Products for Chart Display",
+                            all_products,
+                            default=all_products,
+                            key="chart_product_filter"
+                        )
+                    else:
+                        product_filter = None
+
+                    # --- Filter all relevant DataFrames by selected products ---
+                    if product_filter is not None:
+                        # Filter original_forecast, adjusted_forecast, historical_data, and displays
+                        original_forecast = original_forecast[original_forecast["PRODUCT"].astype(str).isin(product_filter)]
+                        adjusted_forecast = adjusted_forecast[adjusted_forecast["PRODUCT"].astype(str).isin(product_filter)]
+                        if 'PRODUCT' in original_forecast_display.columns:
+                            original_forecast_display = original_forecast_display[original_forecast_display["PRODUCT"].astype(str).isin(product_filter)]
+                        if 'PRODUCT' in adjusted_forecast_display.columns:
+                            adjusted_forecast_display = adjusted_forecast_display[adjusted_forecast_display["PRODUCT"].astype(str).isin(product_filter)]
+                        if historical_data is not None and 'PRODUCT' in historical_data.columns:
+                            historical_data = historical_data[historical_data["PRODUCT"].astype(str).isin(product_filter)]
+                        if 'PRODUCT' in original_display.columns:
+                            original_display = original_display[original_display["PRODUCT"].astype(str).isin(product_filter)]
+                        if 'PRODUCT' in adjusted_display.columns:
+                            adjusted_display = adjusted_display[adjusted_display["PRODUCT"].astype(str).isin(product_filter)]
                     
                     col1, col2 = st.columns(2)
                     
@@ -431,6 +468,7 @@ def main():
                     original_display_plot = original_display.copy()
                     adjusted_display_plot = adjusted_display.copy()
 
+                    # Ensure columns exist for plotting
                     if "FORECAST" in original_display_plot.columns:
                         original_display_plot["FORECAST"] = np.ceil(original_display_plot["FORECAST"]).astype(int)
                     if "ADJUSTED_FORECAST" in adjusted_display_plot.columns:
@@ -521,15 +559,15 @@ def main():
 
                         forecast_fig = go.Figure()
 
-                        if "PRODUCT" in original_forecast_display.columns:
-                            # Plot each product as a separate line/bar
-                            for product in sorted(original_forecast_display["PRODUCT"].astype(str).unique()):
-                                prod_orig = original_forecast_display[original_forecast_display["PRODUCT"].astype(str) == str(product)]
-                                prod_adj = adjusted_forecast_display[adjusted_forecast_display["PRODUCT"].astype(str) == str(product)]
+                        # --- Plot by product if available, else aggregate ---
+                        if "PRODUCT" in original_display_plot.columns:
+                            for product in sorted(original_display_plot["PRODUCT"].astype(str).unique()):
+                                prod_orig = original_display_plot[original_display_plot["PRODUCT"].astype(str) == str(product)]
+                                prod_adj = adjusted_display_plot[adjusted_display_plot["PRODUCT"].astype(str) == str(product)]
                                 if chart_type == "Line Chart":
                                     forecast_fig.add_trace(go.Scatter(
                                         x=prod_orig[x_col],
-                                        y=prod_orig["FORECAST"],
+                                        y=prod_orig["FORECAST"] if "FORECAST" in prod_orig.columns else prod_orig["ADJUSTED_FORECAST"],
                                         mode="lines+markers",
                                         name=f"Original Forecast - {product}",
                                         line=dict(width=3),
@@ -537,7 +575,7 @@ def main():
                                     ))
                                     forecast_fig.add_trace(go.Scatter(
                                         x=prod_adj[x_col],
-                                        y=prod_adj["ADJUSTED_FORECAST"],
+                                        y=prod_adj["ADJUSTED_FORECAST"] if "ADJUSTED_FORECAST" in prod_adj.columns else prod_adj["FORECAST"],
                                         mode="lines+markers",
                                         name=f"Adjusted Forecast - {product}",
                                         line=dict(width=3, dash="dash"),
@@ -546,22 +584,21 @@ def main():
                                 elif chart_type == "Bar Chart":
                                     forecast_fig.add_trace(go.Bar(
                                         x=prod_orig[x_col],
-                                        y=prod_orig["FORECAST"],
+                                        y=prod_orig["FORECAST"] if "FORECAST" in prod_orig.columns else prod_orig["ADJUSTED_FORECAST"],
                                         name=f"Original Forecast - {product}",
                                         opacity=0.7
                                     ))
                                     forecast_fig.add_trace(go.Bar(
                                         x=prod_adj[x_col],
-                                        y=prod_adj["ADJUSTED_FORECAST"],
+                                        y=prod_adj["ADJUSTED_FORECAST"] if "ADJUSTED_FORECAST" in prod_adj.columns else prod_adj["FORECAST"],
                                         name=f"Adjusted Forecast - {product}",
                                         opacity=0.7
                                     ))
                         else:
-                            # Fallback for no PRODUCT column
                             if chart_type == "Line Chart":
                                 forecast_fig.add_trace(go.Scatter(
                                     x=original_display_plot[x_col],
-                                    y=original_display_plot["FORECAST"] if "FORECAST" in original_display_plot else original_display_plot["ADJUSTED_FORECAST"],
+                                    y=original_display_plot["FORECAST"] if "FORECAST" in original_display_plot.columns else original_display_plot["ADJUSTED_FORECAST"],
                                     mode="lines+markers",
                                     name="Original Forecast",
                                     line=dict(color="blue", width=3),
@@ -569,7 +606,7 @@ def main():
                                 ))
                                 forecast_fig.add_trace(go.Scatter(
                                     x=adjusted_display_plot[x_col],
-                                    y=adjusted_display_plot["ADJUSTED_FORECAST"] if "ADJUSTED_FORECAST" in adjusted_display_plot else adjusted_display_plot["FORECAST"],
+                                    y=adjusted_display_plot["ADJUSTED_FORECAST"] if "ADJUSTED_FORECAST" in adjusted_display_plot.columns else adjusted_display_plot["FORECAST"],
                                     mode="lines+markers",
                                     name="Adjusted Forecast (Lead Time + Buffer)",
                                     line=dict(color="red", width=3, dash="dash"),
@@ -578,14 +615,14 @@ def main():
                             elif chart_type == "Bar Chart":
                                 forecast_fig.add_trace(go.Bar(
                                     x=original_display_plot[x_col],
-                                    y=original_display_plot["FORECAST"] if "FORECAST" in original_display_plot else original_display_plot["ADJUSTED_FORECAST"],
+                                    y=original_display_plot["FORECAST"] if "FORECAST" in original_display_plot.columns else original_display_plot["ADJUSTED_FORECAST"],
                                     name="Original Forecast",
                                     marker_color="blue",
                                     opacity=0.7
                                 ))
                                 forecast_fig.add_trace(go.Bar(
                                     x=adjusted_display_plot[x_col],
-                                    y=adjusted_display_plot["ADJUSTED_FORECAST"] if "ADJUSTED_FORECAST" in adjusted_display_plot else adjusted_display_plot["FORECAST"],
+                                    y=adjusted_display_plot["ADJUSTED_FORECAST"] if "ADJUSTED_FORECAST" in adjusted_display_plot.columns else adjusted_display_plot["FORECAST"],
                                     name="Adjusted Forecast (Lead Time + Buffer)",
                                     marker_color="red",
                                     opacity=0.7
@@ -626,6 +663,7 @@ def main():
                     
                     tab1, tab2, tab3 = st.tabs(["Base Forecast", "Simulator", "Comparison"])
 
+                    # --- Base Forecast Table ---
                     with tab1:
                         st.subheader("Base Forecast Details")
                         display_adjusted = adjusted_forecast.copy()
@@ -640,43 +678,55 @@ def main():
                         if "PRODUCT" in df.columns:
                             all_products = sorted(df["PRODUCT"].astype(str).unique())
                             all_weeks = sorted(adjusted_forecast["WEEK"].dt.strftime("%Y-%m-%d").unique())
-                            # Create a MultiIndex of all combinations
+                            # Apply product filter to all_products
+                            if product_filter is not None:
+                                all_products = [p for p in all_products if p in product_filter]
                             idx = pd.MultiIndex.from_product([all_weeks, all_products], names=["WEEK", "PRODUCT"])
                             display_adjusted["PRODUCT"] = display_adjusted["PRODUCT"].astype(str)
                             display_adjusted = display_adjusted.set_index(["WEEK", "PRODUCT"])
                             display_adjusted = display_adjusted.reindex(idx).reset_index()
-                            # Fill missing values with 0 for forecasts
                             display_adjusted["ADJUSTED_FORECAST"] = display_adjusted["ADJUSTED_FORECAST"].fillna(0)
-                            display_adjusted["INVENTORY_FORECAST"] = 0  # Set all to 0
+                            display_adjusted["INVENTORY_FORECAST"] = 0
                             display_adjusted["Lead Time (weeks)"] = display_adjusted["Lead Time (weeks)"].fillna(lead_time_weeks)
                         else:
-                            # If no PRODUCT, just ensure all weeks are present
                             all_weeks = sorted(adjusted_forecast["WEEK"].dt.strftime("%Y-%m-%d").unique())
                             display_adjusted = display_adjusted.set_index("WEEK").reindex(all_weeks).reset_index()
                             display_adjusted["ADJUSTED_FORECAST"] = display_adjusted["ADJUSTED_FORECAST"].fillna(0)
-                            display_adjusted["INVENTORY_FORECAST"] = 0  # Set all to 0
+                            display_adjusted["INVENTORY_FORECAST"] = 0
                             display_adjusted["Lead Time (weeks)"] = display_adjusted["Lead Time (weeks)"].fillna(lead_time_weeks)
                             if "PRODUCT" not in display_adjusted.columns:
                                 display_adjusted["PRODUCT"] = ""
 
-                        # Reorder columns as requested: Week, Product, Base Demand Forecast, Inventory Forecast, Lead Time
+                        # --- Filter table by product filter ---
+                        if product_filter is not None and "PRODUCT" in display_adjusted.columns:
+                            display_adjusted = display_adjusted[display_adjusted["PRODUCT"].astype(str).isin(product_filter)]
+
                         display_adjusted = display_adjusted[["WEEK", "PRODUCT", "ADJUSTED_FORECAST", "INVENTORY_FORECAST", "Lead Time (weeks)"]]
-                        display_adjusted.columns = ["Week", "Product", "Base Demand Forecast", "Inventory Forecast", "Lead Time (weeks)"]
-                        display_adjusted.index = display_adjusted.index + 1  # Start index from 1
+                        display_adjusted.columns = ["Week", "Product", "Base Demand Forecast", "Inventory", "Lead Time (weeks)"]
+
+                        # --- NEW CODE: Set the first week Inventory value to 5 for each product ---
+                        if "Product" in display_adjusted.columns and "Week" in display_adjusted.columns:
+                            for product in display_adjusted["Product"].unique():
+                                product_mask = display_adjusted["Product"] == product
+                                product_weeks = display_adjusted.loc[product_mask, "Week"]
+                                if not product_weeks.empty:
+                                    first_week = product_weeks.min()
+                                    idx = display_adjusted.index[(display_adjusted["Product"] == product) & (display_adjusted["Week"] == first_week)]
+                                    if not idx.empty:
+                                        display_adjusted.loc[idx, "Inventory"] = 5
+
+                        display_adjusted.index = display_adjusted.index + 1
                         st.dataframe(display_adjusted, use_container_width=True)
 
+                    # --- Simulator Table ---
                     with tab2:
                         st.subheader("Simulator")
                         edit_changes = st.session_state.get("edit_changes", [])
 
-                        # --- Use the same structure as Base Forecast for Simulator base ---
-                        # Copy the structure from display_adjusted (Base Forecast Table)
                         sim_base = display_adjusted.copy()
-                        # Add columns for user edits
                         sim_base["New Demand Forecast"] = sim_base["Base Demand Forecast"]
-                        sim_base["New Inventory Forecast"] = 0  # Set all to 0
+                        sim_base["New Inventory Forecast"] = 0
 
-                        # Apply edits to create "New Demand Forecast" and "New Inventory Forecast"
                         if edit_changes:
                             for edit in edit_changes:
                                 week = edit.get("Demand Forecast Week")
@@ -691,7 +741,11 @@ def main():
                                 elif table == "Inventory":
                                     sim_base.loc[mask, "New Inventory Forecast"] = new_val
 
-                        sim_base.index = sim_base.index + 1  # Start index from 1
+                        # --- Filter simulator table by product filter ---
+                        if product_filter is not None and "Product" in sim_base.columns:
+                            sim_base = sim_base[sim_base["Product"].astype(str).isin(product_filter)]
+
+                        sim_base.index = sim_base.index + 1
                         st.dataframe(sim_base, use_container_width=True)
 
                         # Show edit history below the simulator table
@@ -700,19 +754,20 @@ def main():
                             edit_history_df = edit_history_df.drop(columns=[col for col in ["Field", "Type"] if col in edit_history_df.columns], errors="ignore")
                             columns_order = ["Table", "Demand Forecast Week", "Product", "Original Unit", "New Unit"]
                             edit_history_df = edit_history_df[[col for col in columns_order if col in edit_history_df.columns]]
-                            edit_history_df.index = edit_history_df.index + 1  # Start index from 1
+                            edit_history_df.index = edit_history_df.index + 1
                             st.markdown("**Edit History:**")
                             st.dataframe(edit_history_df, use_container_width=True)
                         else:
                             st.info("No edits have been made to forecast data yet.")
 
+                    # --- Comparison Table ---
                     with tab3:
                         st.subheader("Side-by-Side Comparison")
                         if "PRODUCT" in original_forecast.columns and "PRODUCT" in adjusted_forecast.columns:
                             comparison_df = pd.merge(
                                 original_forecast[["WEEK", "PRODUCT", "FORECAST"]].rename(columns={"FORECAST": "Original"}),
                                 adjusted_forecast[["WEEK", "PRODUCT", "ADJUSTED_FORECAST", "INVENTORY_FORECAST"]].rename(
-                                    columns={"ADJUSTED_FORECAST": "Adjusted", "INVENTORY_FORECAST": "Inventory Forecast"}),
+                                    columns={"ADJUSTED_FORECAST": "Adjusted", "INVENTORY_FORECAST": "Inventory"}),
                                 on=["WEEK", "PRODUCT"],
                                 how="outer"
                             ).fillna(0)
@@ -720,13 +775,19 @@ def main():
                             comparison_df["Difference"] = comparison_df["Adjusted"] - comparison_df["Original"]
                             comparison_df["WEEK"] = pd.to_datetime(comparison_df["WEEK"]).dt.strftime("%Y-%m-%d")
                             comparison_df = comparison_df.round()
-                            comparison_df = comparison_df[["WEEK", "PRODUCT", "Lead Time (weeks)", "Original", "Adjusted", "Difference", "Inventory Forecast"]]
-                            comparison_df.columns = ["Week", "Product", "Lead Time (weeks)", "Base Demand Forecast", "Adj. Demand Forecast", "Differences (Qty)", "Inventory Forecast"]
+                            # Reorder columns as requested
+                            comparison_df = comparison_df[[
+                                "WEEK", "PRODUCT", "Lead Time (weeks)", "Original", "Adjusted", "Difference", "Inventory"
+                            ]]
+                            comparison_df.columns = [
+                                "Week", "Product", "Lead Time (Weeks)", "Base Demand Forecast",
+                                "Adj. Demand Forecast", "Differences (Qty)", "Inventory"
+                            ]
                         else:
                             comparison_df = pd.merge(
                                 original_forecast[["WEEK", "FORECAST"]].rename(columns={"FORECAST": "Original"}),
                                 adjusted_forecast[["WEEK", "ADJUSTED_FORECAST", "INVENTORY_FORECAST"]].rename(
-                                    columns={"ADJUSTED_FORECAST": "Adjusted", "INVENTORY_FORECAST": "Inventory Forecast"}),
+                                    columns={"ADJUSTED_FORECAST": "Adjusted", "INVENTORY_FORECAST": "Inventory"}),
                                 on="WEEK",
                                 how="outer"
                             ).fillna(0)
@@ -734,9 +795,20 @@ def main():
                             comparison_df["Difference"] = comparison_df["Adjusted"] - comparison_df["Original"]
                             comparison_df["WEEK"] = pd.to_datetime(comparison_df["WEEK"]).dt.strftime("%Y-%m-%d")
                             comparison_df = comparison_df.round(2)
-                            comparison_df = comparison_df[["WEEK", "Lead Time (weeks)", "Original", "Adjusted", "Difference", "Inventory Forecast"]]
-                            comparison_df.columns = ["Week", "Lead Time (weeks)", "Original", "Adjusted", "Difference", "Inventory Forecast"]
-                        comparison_df.index = comparison_df.index + 1  # Start index from 1
+                            # Reorder columns as requested
+                            comparison_df = comparison_df[[
+                                "WEEK", "Lead Time (weeks)", "Original", "Adjusted", "Difference", "Inventory"
+                            ]]
+                            comparison_df.columns = [
+                                "Week", "Lead Time (Weeks)", "Base Demand Forecast",
+                                "Adj. Demand Forecast", "Differences (Qty)", "Inventory"
+                            ]
+
+                        # --- Filter comparison table by product filter ---
+                        if product_filter is not None and "Product" in comparison_df.columns:
+                            comparison_df = comparison_df[comparison_df["Product"].astype(str).isin(product_filter)]
+
+                        comparison_df.index = comparison_df.index + 1
                         st.dataframe(comparison_df, use_container_width=True)
                         
                     # --- AI Insights Integration ---

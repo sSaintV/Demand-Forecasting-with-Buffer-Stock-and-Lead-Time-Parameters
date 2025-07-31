@@ -21,19 +21,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-def calculate_inventory_forecast(adjusted_forecast, initial_inventory, sales_col="ADJUSTED_FORECAST"):
-    """
-    Calculate inventory for each forecast week based on initial inventory and forecasted sales.
-    Inventory[t] = Inventory[t-1] - Sales[t-1] + Replenishment (if any)
-    For simplicity, assume no replenishment unless you want to add logic for it.
-    """
-    inventory = [initial_inventory]
-    for i in range(1, len(adjusted_forecast)):
-        prev_inventory = inventory[-1]
-        sales = adjusted_forecast.iloc[i-1][sales_col]
-        new_inventory = max(prev_inventory - sales, 0)
-        inventory.append(new_inventory)
-    return inventory
 
 def edit_forecast_data(adjusted_forecast, forecast_range, df=None):
     st.sidebar.header("🛠️ Simulator")
@@ -317,73 +304,13 @@ def main():
             target_col = "UNITS"
             
             forecast_periods = st.sidebar.slider("Forecast Periods (weeks)", 4, 52, 4)
-            
-            # st.sidebar.header("📊 Data Filters")
-            # filter_options = []
-            # if "PRODUCT" in df.columns:
-            #     filter_options.append("Product")
-            # if "MANUFACTURER" in df.columns:
-            #     filter_options.append("Manufacturer")
-            # if "BRAND" in df.columns:
-            #     filter_options.append("Brand")
-            # if "CATEGORY" in df.columns:
-            #     filter_options.append("Category")
-            # if "SUBCATEGORY" in df.columns:
-            #     filter_options.append("Sub-Category")
-            # if "SIZE" in df.columns:
-            #     filter_options.append("Size")
-            #
-            # selected_filters = st.sidebar.multiselect(
-            #     "Select Filters to Apply",
-            #     filter_options,
-            #     default=[]
-            # )
-            #
-            # if "Product" in selected_filters and "PRODUCT" in df.columns:
-            #     products = [str(int(p)) if isinstance(p, (int, float)) and float(p).is_integer() else str(p) for p in sorted(df["PRODUCT"].unique())]
-            #     selected_products = st.sidebar.multiselect("Select Product(s)", products, default=products)
-            #     if selected_products:
-            #         df = df[df["PRODUCT"].astype(str).isin(selected_products)]
-            #
-            # if "Manufacturer" in selected_filters and "MANUFACTURER" in df.columns:
-            #     manufacturers = sorted(df["MANUFACTURER"].astype(str).unique())
-            #     selected_manufacturers = st.sidebar.multiselect("Select Manufacturer(s)", manufacturers, default=manufacturers)
-            #     if selected_manufacturers:
-            #         df = df[df["MANUFACTURER"].astype(str).isin(selected_manufacturers)]
-            #
-            # if "Brand" in selected_filters and "BRAND" in df.columns:
-            #     brands = sorted(df["BRAND"].astype(str).unique())
-            #     selected_brands = st.sidebar.multiselect("Select Brand(s)", brands, default=brands)
-            #     if selected_brands:
-            #         df = df[df["BRAND"].astype(str).isin(selected_brands)]
-            #
-            # if "Category" in selected_filters and "CATEGORY" in df.columns:
-            #     categories = sorted(df["CATEGORY"].astype(str).unique())
-            #     selected_categories = st.sidebar.multiselect("Select Category(s)", categories, default=categories)
-            #     if selected_categories:
-            #         df = df[df["CATEGORY"].astype(str).isin(selected_categories)]
-            #
-            # if "Sub-Category" in selected_filters and "SUBCATEGORY" in df.columns:
-            #     sub_categories = sorted(df["SUBCATEGORY"].astype(str).unique())
-            #     selected_sub_categories = st.sidebar.multiselect("Select Sub-Category(s)", sub_categories, default=sub_categories)
-            #     if selected_sub_categories:
-            #         df = df[df["SUBCATEGORY"].astype(str).isin(selected_sub_categories)]
-            #
-            # if "Size" in selected_filters and "SIZE" in df.columns:
-            #     sizes = sorted(df["SIZE"].astype(str).unique())
-            #     selected_sizes = st.sidebar.multiselect("Select Size(s)", sizes, default=sizes)
-            #     if selected_sizes:
-            #         df = df[df["SIZE"].astype(str).isin(selected_sizes)]
                                 
             st.sidebar.header("🚛 Supply Chain Parameters")
             lead_time_weeks = st.sidebar.slider("Lead Time (weeks)", 0, 12, 0, 
                                               help="Time between order placement and delivery")
             
             # Ollama Model Selection
-            #st.sidebar.header("🤖 AI Insights Configuration")
-            # Only allow llama3 as the model
             ollama_model = "llama3"
-            #st.sidebar.markdown("Using Ollama model:" + ollama_model)
             
             st.header("🔮 Demand Forecasting Results")
             
@@ -423,16 +350,10 @@ def main():
                         original_forecast, lead_time_weeks, safety_pct
                     )
 
-                    # --- Inventory Forecast Calculation ---
-                    if "INVENTORY" in df.columns and not df["INVENTORY"].isnull().all():
-                        last_inventory = df["INVENTORY"].iloc[-1]
-                    else:
-                        last_inventory = 0
-
+                    # --- REMOVE Inventory Forecast Calculation ---
+                    # Instead, set INVENTORY_FORECAST to 0 for all records
                     adjusted_forecast = adjusted_forecast.copy()
-                    adjusted_forecast["INVENTORY_FORECAST"] = calculate_inventory_forecast(
-                        adjusted_forecast, initial_inventory=last_inventory, sales_col="ADJUSTED_FORECAST"
-                    )
+                    adjusted_forecast["INVENTORY_FORECAST"] = 0
 
                     st.sidebar.header("📅 Chart Display Settings")
                     forecast_weeks = original_forecast["WEEK"].sort_values().unique()
@@ -448,46 +369,25 @@ def main():
                         format="YYYY-MM-DD"
                     )
 
+                    # --- Product Filter for Charts ---
+                    product_filter = None
+                    if "PRODUCT" in df.columns:
+                        all_products = sorted(df["PRODUCT"].astype(str).unique())
+                        product_filter = st.sidebar.multiselect(
+                            "Filter Products for Chart Display",
+                            all_products,
+                            default=all_products,
+                            key="chart_product_filter"
+                        )
+                    else:
+                        product_filter = None
+
                     # --- Call edit_forecast_data here, after adjusted_forecast is defined and display_range is set ---
                     edit_forecast_data(adjusted_forecast, (display_range[0], display_range[1]), df=df)
 
                     inventory_change_table = None
 
-                    if target_col == "INVENTORY" and "INVENTORY" in df.columns and "display_range" in locals():
-                        first_forecast_week = pd.to_datetime(display_range[0])
-                        orig_inventory = 0
-                        if "WEEK" in original_forecast.columns and "FORECAST" in original_forecast.columns:
-                            forecast_row = original_forecast[original_forecast["WEEK"] == first_forecast_week]
-                            if not forecast_row.empty:
-                                orig_inventory = int(forecast_row["FORECAST"].iloc[0])
-                            else:
-                                if not df[df["WEEK"] == first_forecast_week].empty:
-                                    orig_inventory = int(df.loc[df["WEEK"] == first_forecast_week, "INVENTORY"].iloc[0])
-                                else:
-                                    orig_inventory = 0
-                        else:
-                            if not df[df["WEEK"] == first_forecast_week].empty:
-                                orig_inventory = int(df.loc[df["WEEK"] == first_forecast_week, "INVENTORY"].iloc[0])
-                            else:
-                                orig_inventory = 0
-
-                        changed_inventory = st.sidebar.number_input(
-                            f"Inventory for {first_forecast_week.strftime('%Y-%m-%d')}",
-                            min_value=0,
-                            value=orig_inventory,
-                            step=1,
-                            key=f"inv_{first_forecast_week}",
-                            disabled=True 
-                        )
-
-                        if changed_inventory != orig_inventory:
-                            df.loc[df["WEEK"] == first_forecast_week, "INVENTORY"] = changed_inventory
-
-                        inventory_change_table = pd.DataFrame({
-                            "Week": [first_forecast_week.strftime("%Y-%m-%d")],
-                            "Original Inventory": [orig_inventory],
-                            "Changed Inventory": [changed_inventory]
-                        })
+                    # --- REMOVE all logic for inventory_change_table and inventory number_input ---
 
                     original_forecast_display = original_forecast[
                         (original_forecast["WEEK"] >= display_range[0]) & (original_forecast["WEEK"] <= display_range[1])
@@ -720,9 +620,7 @@ def main():
                     with metrics_col4:
                         st.metric("Total Impact", f"{impact_pct:+.1f}%")
                     
-                    if inventory_change_table is not None:
-                        st.subheader("🔄 Inventory Change for First Forecast Week")
-                        st.dataframe(inventory_change_table, use_container_width=True)
+                    # --- REMOVE inventory_change_table display ---
 
                     st.header("📋 Detailed Forecast Data")
                     
@@ -749,14 +647,14 @@ def main():
                             display_adjusted = display_adjusted.reindex(idx).reset_index()
                             # Fill missing values with 0 for forecasts
                             display_adjusted["ADJUSTED_FORECAST"] = display_adjusted["ADJUSTED_FORECAST"].fillna(0)
-                            display_adjusted["INVENTORY_FORECAST"] = display_adjusted["INVENTORY_FORECAST"].fillna(0)
+                            display_adjusted["INVENTORY_FORECAST"] = 0  # Set all to 0
                             display_adjusted["Lead Time (weeks)"] = display_adjusted["Lead Time (weeks)"].fillna(lead_time_weeks)
                         else:
                             # If no PRODUCT, just ensure all weeks are present
                             all_weeks = sorted(adjusted_forecast["WEEK"].dt.strftime("%Y-%m-%d").unique())
                             display_adjusted = display_adjusted.set_index("WEEK").reindex(all_weeks).reset_index()
                             display_adjusted["ADJUSTED_FORECAST"] = display_adjusted["ADJUSTED_FORECAST"].fillna(0)
-                            display_adjusted["INVENTORY_FORECAST"] = display_adjusted["INVENTORY_FORECAST"].fillna(0)
+                            display_adjusted["INVENTORY_FORECAST"] = 0  # Set all to 0
                             display_adjusted["Lead Time (weeks)"] = display_adjusted["Lead Time (weeks)"].fillna(lead_time_weeks)
                             if "PRODUCT" not in display_adjusted.columns:
                                 display_adjusted["PRODUCT"] = ""
@@ -776,7 +674,7 @@ def main():
                         sim_base = display_adjusted.copy()
                         # Add columns for user edits
                         sim_base["New Demand Forecast"] = sim_base["Base Demand Forecast"]
-                        sim_base["New Inventory Forecast"] = sim_base["Inventory Forecast"]
+                        sim_base["New Inventory Forecast"] = 0  # Set all to 0
 
                         # Apply edits to create "New Demand Forecast" and "New Inventory Forecast"
                         if edit_changes:
@@ -807,7 +705,7 @@ def main():
                             st.dataframe(edit_history_df, use_container_width=True)
                         else:
                             st.info("No edits have been made to forecast data yet.")
-                            
+
                     with tab3:
                         st.subheader("Side-by-Side Comparison")
                         if "PRODUCT" in original_forecast.columns and "PRODUCT" in adjusted_forecast.columns:
@@ -840,7 +738,7 @@ def main():
                             comparison_df.columns = ["Week", "Lead Time (weeks)", "Original", "Adjusted", "Difference", "Inventory Forecast"]
                         comparison_df.index = comparison_df.index + 1  # Start index from 1
                         st.dataframe(comparison_df, use_container_width=True)
-
+                        
                     # --- AI Insights Integration ---
                     st.markdown("---")
                     st.subheader("🤖 AI-Powered Insights")

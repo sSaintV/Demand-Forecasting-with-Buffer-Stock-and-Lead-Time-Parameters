@@ -21,6 +21,34 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# --- Simulator Reset Functionality ---
+def save_simulator_original(display_adjusted):
+    """
+    Save the original, unedited simulator table for reset functionality.
+    """
+    # Always ensure baseline columns exist for reset
+    sim_base = display_adjusted.copy()
+    if "New Demand Forecast" not in sim_base.columns:
+        sim_base["New Demand Forecast"] = sim_base["Base Demand Forecast"]
+    if "New Inventory Forecast" not in sim_base.columns:
+        sim_base["New Inventory Forecast"] = sim_base["Inventory"]
+    st.session_state["sim_base_original"] = sim_base
+
+def reset_simulator_to_original():
+    """
+    Restore the simulator table to its original values and clear all edits.
+    """
+    if "sim_base_original" in st.session_state:
+        sim_base = st.session_state["sim_base_original"].copy()
+        # Always ensure columns exist after reset
+        if "New Demand Forecast" not in sim_base.columns:
+            sim_base["New Demand Forecast"] = sim_base["Base Demand Forecast"]
+        if "New Inventory Forecast" not in sim_base.columns:
+            sim_base["New Inventory Forecast"] = sim_base["Inventory"]
+        st.session_state["sim_base_df"] = sim_base
+    st.session_state["edit_changes"] = []
+    st.success("Simulator table reset to original values.")
+    st.rerun()
 
 def generate_prompt_ollama(weeks, base_forecast, product_id, future_weeks, actuals=None, historical_weeks=None, historical_units=None):
     """
@@ -152,7 +180,6 @@ def recalculate_inventory(sim_base, demand_col="New Demand Forecast", inventory_
 
     # Identify all manual inventory overrides: (Product, Week) -> value
     manual_inventory = {}
-    # Look for rows where the inventory value was manually set via edit_changes
     edit_changes = st.session_state.get("edit_changes", [])
     for edit in edit_changes:
         if (edit.get("Value Type") == "Inventory" or edit.get("Field Type") == "Inventory"):
@@ -164,22 +191,17 @@ def recalculate_inventory(sim_base, demand_col="New Demand Forecast", inventory_
         product_mask = sim_base["Product"] == product
         product_df = sim_base[product_mask].sort_values("Week")
         weeks = product_df["Week"].tolist()
-        # Build a list of inventory values, preserving manual overrides
         for i, week in enumerate(weeks):
             idx = product_df.index[i]
             if i == 0:
-                # Always keep the first week's inventory as is (could be user-edited)
-                continue
+                continue  # First week inventory stays as is (could be user-edited)
             prev_idx = product_df.index[i - 1]
             prev_inventory = sim_base.loc[prev_idx, inventory_col]
             curr_demand = sim_base.loc[idx, demand_col]
-            # If this week is a manual override, preserve it
             manual_key = (str(product), week)
             if manual_key in manual_inventory:
-                # Use the manually set value, do not recalculate
                 sim_base.loc[idx, inventory_col] = manual_inventory[manual_key]
             else:
-                # Normal calculation from previous inventory
                 sim_base.loc[idx, inventory_col] = prev_inventory - curr_demand
     return sim_base
 
@@ -229,7 +251,6 @@ def calculate_inventory_matrix(df, product_col="Product", week_col="Week", deman
 
 def edit_forecast_data(adjusted_forecast, forecast_range, df=None):
     st.sidebar.header("🛠️ Simulator")
-    # --- Field selection for editing ---
     edit_field = st.sidebar.selectbox(
         "Select Field to Edit",
         options=["Demand Forecast", "Inventory"],
@@ -246,7 +267,6 @@ def edit_forecast_data(adjusted_forecast, forecast_range, df=None):
     data_source = adjusted_forecast
     key_prefix = "forecast"
 
-    # Filter forecast weeks in the selected range
     forecast_weeks = data_source[
         (data_source["WEEK"] >= forecast_range[0]) & (data_source["WEEK"] <= forecast_range[1])
     ]["WEEK"].dt.strftime("%Y-%m-%d").unique()
@@ -255,17 +275,14 @@ def edit_forecast_data(adjusted_forecast, forecast_range, df=None):
         st.sidebar.info("No forecast weeks in the selected range.")
         return
 
-    # Select week to edit
     week_val = st.sidebar.selectbox(
         "Select Forecast Week",
         forecast_weeks,
         key=f"{key_prefix}_week_selectbox"
     )
 
-    # --- Filter product options by Product Filter in session_state ---
     product_val = None
     if "PRODUCT" in data_source.columns:
-        # Always use the current filter from session state for sidebar and simulator sync
         product_filter = st.session_state.get("active_product_filter", None)
         available_products = sorted(data_source["PRODUCT"].astype(str).unique())
         if product_filter:
@@ -276,12 +293,10 @@ def edit_forecast_data(adjusted_forecast, forecast_range, df=None):
             key=f"{key_prefix}_product_selectbox"
         )
 
-    # Mask for the selected row
     mask = (data_source["WEEK"].dt.strftime("%Y-%m-%d") == week_val)
     if product_val is not None:
         mask &= (data_source["PRODUCT"].astype(str) == product_val)
 
-    # Retrieve the current value from the Simulator table for Inventory or Unit
     sim_base = st.session_state.get("sim_base_df", None)
     current_val = None
     if edit_field == "Inventory":
@@ -315,9 +330,17 @@ def edit_forecast_data(adjusted_forecast, forecast_range, df=None):
         st.session_state["edit_changes"] = []
 
     if st.sidebar.button("Apply Change", key=f"{key_prefix}_apply_btn"):
-        # Record the change, now with explicit Value Type column
+        # Remove any previous edit for this week/product/field to avoid duplicates
+        st.session_state["edit_changes"] = [
+            e for e in st.session_state["edit_changes"]
+            if not (
+                e.get("Value Type") == table_type and
+                e.get("Demand Forecast Week") == week_val and
+                (e.get("Product", "") == (product_val if product_val else ""))
+            )
+        ]
         st.session_state["edit_changes"].append({
-            "Value Type": table_type,  # <-- NEW COLUMN
+            "Value Type": table_type,
             "Field Type": table_type,
             "Demand Forecast Week": week_val,
             "Product": product_val if product_val else "",
@@ -736,7 +759,17 @@ def main():
                         if "PRODUCT" not in adjusted_display_for_chart.columns and "Product" in adjusted_display_for_chart.columns:
                             adjusted_display_for_chart["PRODUCT"] = adjusted_display_for_chart["Product"]
                         adjusted_display_for_chart["ADJUSTED_FORECAST"] = adjusted_display_for_chart["ADJUSTED_FORECAST"]
+                    
+                    # --- Save original simulator table for reset functionality (only once per session or when data changes) ---
+                    if "sim_base_original" not in st.session_state or st.session_state.get("sim_base_original_hash", None) != hash(display_adjusted.to_csv(index=False)):
+                        save_simulator_original(display_adjusted)
+                        st.session_state["sim_base_original_hash"] = hash(display_adjusted.to_csv(index=False))
 
+                    # --- Add Reset Button in Sidebar ---
+                    st.sidebar.markdown("---")
+                    if st.sidebar.button("Reset Simulator Table"):
+                        reset_simulator_to_original()
+                    
                     # --- Prepare chart dataframes ---
                     # Always filter by product
                     adjusted_display_for_chart = filter_all(adjusted_display_for_chart, "PRODUCT")
@@ -998,8 +1031,12 @@ def main():
 
                         # Start from the authoritative Base Forecast table
                         sim_base = display_adjusted.copy()
-                        sim_base["New Demand Forecast"] = sim_base["Base Demand Forecast"]
-                        sim_base["New Inventory Forecast"] = sim_base["Inventory"]
+
+                        # --- ALWAYS ensure columns exist before assignment, even after reset ---
+                        if "New Demand Forecast" not in sim_base.columns:
+                            sim_base["New Demand Forecast"] = sim_base["Base Demand Forecast"]
+                        if "New Inventory Forecast" not in sim_base.columns:
+                            sim_base["New Inventory Forecast"] = sim_base["Inventory"]
 
                         # --- ROUND before applying edits and recalculation ---
                         sim_base["New Demand Forecast"] = np.round(sim_base["New Demand Forecast"])
@@ -1011,7 +1048,6 @@ def main():
                                 week = pd.to_datetime(edit.get("Demand Forecast Week"))
                                 product = str(edit.get("Product", ""))
                                 table = edit.get("Table") if "Table" in edit else edit.get("Field Type")
-                                # Accept both "Table" and "Field Type" for backward compatibility
                                 new_val = edit.get("New Unit")
                                 mask = (sim_base["Week"] == week)
                                 if product:

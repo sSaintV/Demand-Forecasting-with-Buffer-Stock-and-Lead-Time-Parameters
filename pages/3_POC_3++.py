@@ -22,6 +22,124 @@ st.set_page_config(
 )
 
 
+def generate_prompt_ollama(weeks, base_forecast, product_id, future_weeks, actuals=None, historical_weeks=None, historical_units=None):
+    """
+    Advanced prompt engineering for Llama 3:
+    Generates high-quality, product-specific AI insights for each SKU and forecast period.
+    Focuses exclusively on Base forecast values, but includes historical data for seasonality and accuracy metrics.
+    """
+    # Format forecast weeks
+    weeks = pd.to_datetime(weeks)
+    if hasattr(weeks, "dt"):
+        week_strs = weeks.dt.strftime("%Y-%m-%d")
+    else:
+        week_strs = pd.Series(weeks).dt.strftime("%Y-%m-%d")
+    df_forecast = pd.DataFrame({
+        "Week": week_strs,
+        "Base Forecast": [int(round(x)) for x in base_forecast]
+    })
+
+    # Format historical data if provided
+    historical_table_md = ""
+    if historical_weeks is not None and historical_units is not None:
+        hist_weeks = pd.to_datetime(historical_weeks)
+        if hasattr(hist_weeks, "dt"):
+            hist_week_strs = hist_weeks.dt.strftime("%Y-%m-%d")
+        else:
+            hist_week_strs = pd.Series(hist_weeks).dt.strftime("%Y-%m-%d")
+        df_hist = pd.DataFrame({
+            "Week": hist_week_strs,
+            "Actuals": [int(round(x)) for x in historical_units]
+        })
+        historical_table_md = "\n#### Historical Actuals\n" + df_hist.to_markdown(index=False) + "\n"
+
+    # If actuals are provided for forecast period, add them for accuracy metrics
+    if actuals is not None:
+        df_forecast["Actuals"] = [int(round(x)) for x in actuals]
+
+    table_md = df_forecast.to_markdown(index=False)
+
+    prompt = f"""
+You are an advanced demand forecasting and inventory optimization AI. Analyze the following Base forecast data for product SKU '{product_id}':
+
+#### Forecast Table
+{table_md}
+{historical_table_md}
+
+For this product and forecast period, provide detailed, actionable insights in the following structured format:
+
+---
+
+### 1. **Seasonality Detection**
+- Identify and describe any repeating seasonal patterns, peaks, or troughs in the forecasted demand, using both the historical actuals and forecast data.
+- Specify which weeks or periods show significant seasonality or anomalies.
+
+### 2. **Inventory Recommendations**
+- Recommend optimal inventory levels for each forecasted week, considering demand variability and potential stockouts.
+- Highlight any weeks where inventory risk is high and suggest mitigation strategies.
+
+### 3. **Forecast Accuracy Metrics**
+- If actuals are provided, calculate and report forecast accuracy metrics (e.g., MAE, MAPE, RMSE) for the available periods.
+- Comment on the reliability of the forecast for this SKU.
+
+### 4. **Outlier Identification**
+- Detect and list any outlier weeks in the forecasted demand (unusually high or low values).
+- Suggest possible causes for these outliers.
+
+### 5. **Trend Analysis**
+- Analyze the overall demand trend (increasing, decreasing, stable, or volatile) using both historical and forecast data.
+- Quantify the trend (e.g., average weekly change, % growth/decline).
+
+### 6. **Demand Pattern Insights**
+- Summarize key demand patterns for this SKU.
+- Provide actionable business recommendations for promotions, supply chain, or pricing based on the forecast.
+
+---
+
+**Important Instructions:**
+- Use only the Base forecast values and historical actuals provided above as your data source.
+- Do not reference or compare to any other forecast scenarios or products.
+- Segment your analysis clearly for this product and forecast period.
+- Respond in markdown format, using bullet points and bolded section headers as shown above.
+"""
+    return prompt
+
+def generate_multi_product_prompt(forecast_df, actuals_df=None):
+    """
+    Generates a single prompt that segments insights by product (SKU) and forecast period.
+    Each product gets a dedicated section with its own table and analysis.
+    """
+    prompt_sections = []
+    for product in forecast_df["Product"].unique():
+        prod_df = forecast_df[forecast_df["Product"] == product]
+        weeks = prod_df["Week"]
+        base_forecast = prod_df["Base Demand Forecast"] if "Base Demand Forecast" in prod_df.columns else prod_df["UNITS"]
+        actuals = None
+        if actuals_df is not None and product in actuals_df["Product"].unique():
+            actuals = actuals_df[actuals_df["Product"] == product]["UNITS"]
+        section = generate_prompt_ollama(
+            weeks=weeks,
+            base_forecast=base_forecast,
+            product_id=product,
+            future_weeks=weeks.tolist(),
+            actuals=actuals
+        )
+        prompt_sections.append(f"## Product: {product}\n\n{section}")
+    return "\n\n---\n\n".join(prompt_sections)
+
+# --- Robust error handling for CSV parsing in main app ---
+def safe_read_csv(uploaded_file):
+    try:
+        df = pd.read_csv(uploaded_file)
+        if "WEEK" not in df.columns or "UNITS" not in df.columns or "SALES" not in df.columns:
+            raise ValueError("Missing required columns: WEEK, UNITS, SALES")
+        return df
+    except Exception as e:
+        st.error(f"Error processing file: {str(e)}")
+        st.info("Please ensure your CSV file contains the required columns: WEEK, UNITS, SALES")
+        return None
+
+
 def recalculate_inventory(sim_base, demand_col="New Demand Forecast", inventory_col="New Inventory Forecast"):
     """
     Recalculates inventory for each product after any change.
@@ -114,11 +232,11 @@ def edit_forecast_data(adjusted_forecast, forecast_range, df=None):
     # --- Field selection for editing ---
     edit_field = st.sidebar.selectbox(
         "Select Field to Edit",
-        options=["Unit", "Inventory"],
+        options=["Demand Forecast", "Inventory"],
         index=0,
         key="simulator_field_select"
     )
-    if edit_field == "Unit":
+    if edit_field == "Demand Forecast":
         field = "ADJUSTED_FORECAST"
         table_type = "Unit"
     else:
@@ -403,9 +521,10 @@ def main():
             if df is None:
                 st.stop()
             
-            st.sidebar.header("🎯 Forecast Configuration")
-            model_type = st.sidebar.selectbox("Forecast Model", ["Random Forest", "Linear Regression"])
-            st.sidebar.markdown("Select the model type for forecasting. Random Forest is generally more robust, while Linear Regression is simpler and faster.")
+            # st.sidebar.header("🎯 Forecast Configuration")
+            # model_type = st.sidebar.selectbox("Forecast Model", ["Random Forest", "Linear Regression"])
+            model_type = "Random Forest"  # Default to Random Forest for POC
+            # st.sidebar.markdown("Select the model type for forecasting. Random Forest is generally more robust, while Linear Regression is simpler and faster.")
 
             # Target Variable is set only to Units, no need for any input.
             target_col = "UNITS"
@@ -703,7 +822,7 @@ def main():
                         chart_type = st.sidebar.radio(
                             "Chart Type", 
                             ["Line Chart", "Bar Chart"], 
-                            index=0, 
+                            index=1, 
                             horizontal=True
                         )
 
@@ -868,7 +987,10 @@ def main():
 
                     with tab1:
                         st.subheader("Base Forecast Details")
-                        st.dataframe(display_adjusted, use_container_width=True)
+                        # Set index to start at 1 for display
+                        display_adjusted_for_table = display_adjusted.copy()
+                        display_adjusted_for_table.index = np.arange(1, len(display_adjusted_for_table) + 1)
+                        st.dataframe(display_adjusted_for_table, use_container_width=True)
 
                     with tab2:
                         st.subheader("Simulator")
@@ -1039,31 +1161,46 @@ def main():
 
                     # Prepare data for Ollama prompt
                     # Use adjusted_forecast for insights
-                    ollama_forecast_data = adjusted_forecast[["WEEK", "ADJUSTED_FORECAST"]].copy()
-                    ollama_forecast_data.columns = ["WEEK", "UNITS"]
-                    
-                    # Assuming single product for simplicity in this prompt generation. 
-                    # If multiple products are present, this needs to be handled by iterating or aggregating.
-                    if "PRODUCT" in df.columns:
-                        product_id_for_ollama = df["PRODUCT"].iloc[0] # Take the first product if multiple
+                    ollama_forecast_data = adjusted_forecast[["WEEK", "ADJUSTED_FORECAST", "PRODUCT"]].copy() if "PRODUCT" in adjusted_forecast.columns else adjusted_forecast[["WEEK", "ADJUSTED_FORECAST"]].copy()
+                    if "PRODUCT" in ollama_forecast_data.columns:
+                        ollama_forecast_data.columns = ["WEEK", "UNITS", "PRODUCT"]
                     else:
-                        product_id_for_ollama = "Overall Demand"
+                        ollama_forecast_data.columns = ["WEEK", "UNITS"]
 
-                    # Generate prompt for Ollama using the adjusted forecast data
-                    ollama_prompt = generate_prompt_ollama(
-                        ollama_forecast_data["WEEK"],
-                        ollama_forecast_data["UNITS"],
-                        product_id_for_ollama,
-                        ollama_forecast_data["WEEK"].tolist() # Pass the forecast weeks as future_weeks
-                    )
+                    # Determine filtered products for chart display
+                    filtered_products = product_filter if product_filter is not None else []
+                    multi_product_mode = len(filtered_products) > 1
+
+                    # --- Generate prompt for Ollama using the correct function based on product filter ---
+                    if multi_product_mode:
+                        # Multi-product: use generate_multi_product_prompt
+                        ollama_prompt = generate_multi_product_prompt(
+                            forecast_df=display_adjusted[display_adjusted["Product"].isin(filtered_products)],
+                            actuals_df=None  # Add actuals_df if available
+                        )
+                        ollama_context_products = filtered_products
+                    else:
+                        # Single product or all: use generate_prompt_ollama
+                        if "PRODUCT" in df.columns and len(filtered_products) == 1:
+                            product_id_for_ollama = filtered_products[0]
+                        elif "PRODUCT" in df.columns:
+                            product_id_for_ollama = df["PRODUCT"].iloc[0]
+                        else:
+                            product_id_for_ollama = "Overall Demand"
+                        ollama_prompt = generate_prompt_ollama(
+                            ollama_forecast_data["WEEK"],
+                            ollama_forecast_data["UNITS"],
+                            product_id_for_ollama,
+                            ollama_forecast_data["WEEK"].tolist()
+                        )
+                        ollama_context_products = [product_id_for_ollama]
 
                     if st.button("Generate AI Insights with Ollama"):
                         with st.spinner(f"Generating AI insights using {ollama_model}..."):
                             try:
                                 ollama_output = run_ollama_forecast(ollama_prompt, model=ollama_model)
-                                # Pass historical units for clipping, if available and relevant
                                 historical_units_for_ollama = historical_data["ACTUAL"].values if historical_data is not None else None
-                                
+
                                 ollama_forecast_parsed, ollama_markdown_table, ollama_insights = parse_forecast_ollama(
                                     ollama_output, historical_units=historical_units_for_ollama
                                 )
@@ -1072,7 +1209,9 @@ def main():
                                     "insights": ollama_insights,
                                     "forecast": ollama_forecast_parsed,
                                     "future_weeks": ollama_forecast_data["WEEK"].tolist(),
-                                    "product_id": product_id_for_ollama
+                                    "product_id": ollama_context_products,
+                                    "multi_product_mode": multi_product_mode,
+                                    "ollama_prompt": ollama_prompt
                                 }
                             except Exception as e:
                                 st.error(f"Error generating Ollama insights: {e}")
@@ -1104,7 +1243,7 @@ def main():
                                 "⚠️ The following edits have been made to the historical or forecasted data by the user:\n"
                                 + "\n".join(
                                     [
-                                        f"- {e['Field']} for {e['Product']} on {e['Week']} set to {e['New Value']}"
+                                        f"- {e.get('Value Type','')} for {e.get('Product','')} on {e.get('Demand Forecast Week','')} set to {e.get('New Value','')}"
                                         for e in edit_changes
                                     ]
                                 )
@@ -1125,13 +1264,18 @@ def main():
                                     + "User question: "
                                     + user_input_chat
                                 )
-                                # Always use the latest edited data for context
-                                chat_prompt = build_chat_prompt_ollama(
-                                    chat_prompt,
-                                    ollama_forecast_data,  # This is based on the latest adjusted_forecast
-                                    ollama_results["future_weeks"],
-                                    ollama_results["forecast"]
-                                )
+                                # Use multi-product prompt context if in multi-product mode
+                                if ollama_results.get("multi_product_mode", False):
+                                    # Use the same multi-product prompt as context for the chat
+                                    chat_prompt = ollama_results["ollama_prompt"] + "\n\n" + chat_prompt
+                                else:
+                                    # Use the single-product prompt context
+                                    chat_prompt = build_chat_prompt_ollama(
+                                        chat_prompt,
+                                        ollama_forecast_data,
+                                        ollama_results["future_weeks"],
+                                        ollama_results["forecast"]
+                                    )
                                 response = cached_llm_response(chat_prompt, model=ollama_model)
                             st.session_state.chat_history_unified.append({"role": "assistant", "content": response})
                             st.chat_message("assistant").write(response)
@@ -1177,14 +1321,9 @@ def main():
         
         sample_data = pd.DataFrame({
             "WEEK": ["2024-01-01", "2024-01-08", "2024-01-15"],
-            "STORE": ["Store_A", "Store_A", "Store_A"],
-            "STORE_TYPE": ["Type_1", "Type_1", "Type_1"],
             "PRODUCT": ["Product_X", "Product_X", "Product_X"],
             "CATEGORY": ["Category_1", "Category_1", "Category_1"],
             "UNITS": [100, 150, 120],
-            "SALES": [1000, 1500, 1200],
-            "BASE_PRICE": [10, 10, 10],
-            "PRICE": [10, 8, 10],
             "INVENTORY": [500, 400, 450]
         })
         
@@ -1201,4 +1340,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

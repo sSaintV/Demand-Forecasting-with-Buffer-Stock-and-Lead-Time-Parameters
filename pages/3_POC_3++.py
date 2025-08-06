@@ -13,6 +13,34 @@ warnings.filterwarnings("ignore")
 import base64
 from ollama_utils import generate_prompt_ollama, run_ollama_forecast, parse_forecast_ollama, build_chat_prompt_ollama, cached_llm_response
 
+def consolidate_lead_time(df, lead_time_col="Lead Time (weeks)", demand_col="New Demand Forecast", group_cols=["Product"]):
+    """
+    Applies lead time consolidation to the demand column for each product.
+    Sets the first (Lead Time - 1) weeks to zero, and sums those values into the Lead Time week.
+    Leaves subsequent weeks unchanged.
+    """
+    df = df.copy()
+    if lead_time_col not in df.columns:
+        df[lead_time_col] = 0
+    # If not grouped by product, just use all rows
+    if group_cols and all(col in df.columns for col in group_cols):
+        grouped = df.groupby(group_cols)
+        for name, group in grouped:
+            lt = int(group[lead_time_col].iloc[0])
+            if lt > 1 and len(group) >= lt:
+                idxs = group.index.tolist()
+                # Zero out first (lt-1) weeks
+                df.loc[idxs[:lt-1], demand_col] = 0
+                # Sum first (lt) weeks into the Lead Time week
+                df.loc[idxs[lt-1], demand_col] = group[demand_col].iloc[:lt].sum()
+    else:
+        lt = int(df[lead_time_col].iloc[0]) if lead_time_col in df.columns else 0
+        if lt > 1 and len(df) >= lt:
+            idxs = df.index.tolist()
+            df.loc[idxs[:lt-1], demand_col] = 0
+            df.loc[idxs[lt-1], demand_col] = df[demand_col].iloc[:lt].sum()
+    return df
+
 # Set page configuration
 st.set_page_config(
     page_title="Demand Forecasting with AI Insights",
@@ -1128,10 +1156,10 @@ def main():
 
                     with tab1:
                         st.subheader("Base Forecast Details")
-                        # Set index to start at 1 for display
                         display_adjusted_for_table = display_adjusted.copy()
                         display_adjusted_for_table.index = np.arange(1, len(display_adjusted_for_table) + 1)
-                        st.dataframe(display_adjusted_for_table, use_container_width=True)
+                        # Columns: Week, Product, Base Demand Forecast, Inventory, Lead Time (weeks)
+                        st.dataframe(display_adjusted_for_table[["Week", "Product", "Base Demand Forecast", "Inventory", "Lead Time (weeks)"]], use_container_width=True)
 
                     with tab2:
                         st.subheader("Simulator")
@@ -1189,7 +1217,7 @@ def main():
                         # --- Store the updated Simulator table for sidebar access ---
                         st.session_state["sim_base_df"] = sim_base.copy()
 
-                        st.dataframe(sim_base, use_container_width=True)
+                        st.dataframe(sim_base[["Week", "Product", "Base Demand Forecast", "Inventory", "Lead Time (weeks)", "New Demand Forecast", "New Inventory Forecast"]], use_container_width=True)
 
                         # Show edit history below the simulator table
                         if edit_changes:
@@ -1218,8 +1246,6 @@ def main():
                     # --- Comparison Table ---
                     with tab3:
                         st.subheader("Side-by-Side Comparison")
-
-                        # Get the latest Simulator Table (sim_base) as source of truth for "new" values
                         sim_base = st.session_state.get("sim_base_df", None)
                         if sim_base is not None and not sim_base.empty:
                             # Prepare base DataFrame for comparison (original/base values)
@@ -1294,7 +1320,6 @@ def main():
 
                         # --- Filter comparison table by product filter ---
                         comparison_df = filter_all(comparison_df, "Product")
-
                         comparison_df.index = comparison_df.index + 1
                         comparison_df = filter_all(comparison_df, "Product")
                         st.dataframe(comparison_df, use_container_width=True)

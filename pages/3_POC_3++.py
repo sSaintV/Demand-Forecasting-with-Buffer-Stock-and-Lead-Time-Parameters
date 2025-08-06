@@ -634,8 +634,78 @@ def main():
                         format="YYYY-MM-DD"
                     )
 
+                    # --- FILTER ALL DATAFRAMES BY DATE RANGE ---
+                    def filter_by_range(df, week_col, start_date, end_date):
+                        if df is None or len(df) == 0:
+                            return df
+                        df = df.copy()
+                        # Fix: Accept both 'Week' and 'WEEK' as valid columns, fallback to first found
+                        possible_week_cols = [week_col, "Week", "WEEK"]
+                        actual_week_col = None
+                        for col in possible_week_cols:
+                            if col in df.columns:
+                                actual_week_col = col
+                                break
+                        if actual_week_col is None:
+                            raise KeyError(f"No valid week column found in DataFrame. Tried: {possible_week_cols}")
+                        df[actual_week_col] = pd.to_datetime(df[actual_week_col])
+                        return df[(df[actual_week_col] >= pd.to_datetime(start_date)) & (df[actual_week_col] <= pd.to_datetime(end_date))]
+                    
+                    start_week, end_week = display_range[0], display_range[1]
+
+                    # Apply to all relevant DataFrames
+                    original_forecast = filter_by_range(original_forecast, "WEEK", start_week, end_week)
+                    adjusted_forecast = filter_by_range(adjusted_forecast, "WEEK", start_week, end_week)
+                    historical_data = filter_by_range(historical_data, "WEEK", start_week, end_week) if historical_data is not None else None
+
+                    # For *_display DataFrames, always assign from filtered base if not defined
+                    try:
+                        original_forecast_display
+                    except NameError:
+                        original_forecast_display = original_forecast.copy()
+                    original_forecast_display = filter_by_range(original_forecast_display, "WEEK", start_week, end_week)
+
+                    try:
+                        adjusted_forecast_display
+                    except NameError:
+                        adjusted_forecast_display = adjusted_forecast.copy()
+                    adjusted_forecast_display = filter_by_range(adjusted_forecast_display, "WEEK", start_week, end_week)
+
+                    try:
+                        display_adjusted
+                    except NameError:
+                        display_adjusted = adjusted_forecast.copy()
+                    display_adjusted = filter_by_range(display_adjusted, "Week", start_week, end_week)
+
+                    if "sim_base_df" in st.session_state and st.session_state["sim_base_df"] is not None:
+                        st.session_state["sim_base_df"] = filter_by_range(st.session_state["sim_base_df"], "Week", start_week, end_week)
+
+                    # Only filter *_display if they already exist, else assign from base
+                    if 'original_forecast_display' in locals():
+                        if 'PRODUCT' in original_forecast.columns:
+                            original_forecast_display = filter_by_range(original_forecast_display, "WEEK", start_week, end_week)
+                        else:
+                            original_forecast_display = filter_by_range(original_forecast, "WEEK", start_week, end_week)
+                    else:
+                        original_forecast_display = filter_by_range(original_forecast, "WEEK", start_week, end_week)
+
+                    if 'adjusted_forecast_display' in locals():
+                        if 'PRODUCT' in adjusted_forecast.columns:
+                            adjusted_forecast_display = filter_by_range(adjusted_forecast_display, "WEEK", start_week, end_week)
+                        else:
+                            adjusted_forecast_display = filter_by_range(adjusted_forecast, "WEEK", start_week, end_week)
+                    else:
+                        adjusted_forecast_display = filter_by_range(adjusted_forecast, "WEEK", start_week, end_week)
+
+                    if historical_data is not None and 'WEEK' in historical_data.columns:
+                        historical_data = filter_by_range(historical_data, "WEEK", start_week, end_week)
+
+                    # For display_adjusted and simulator tables, use "Week" as the column name
+                    if 'display_adjusted' in locals():
+                        display_adjusted = filter_by_range(display_adjusted, "Week", start_week, end_week)
+
                     # --- Call edit_forecast_data here, after adjusted_forecast is defined and display_range is set ---
-                    edit_forecast_data(adjusted_forecast, (display_range[0], display_range[1]), df=df)
+                    edit_forecast_data(adjusted_forecast, (start_week, end_week), df=df)
 
                     # --- Always filter all tables and charts using the same product_filter ---
                     def filter_all(df, product_col="PRODUCT"):
@@ -852,68 +922,106 @@ def main():
 
                     with col1:
                         st.subheader("📈 Historical Data")
-                        chart_type = st.sidebar.radio(
-                            "Chart Type", 
+                        hist_chart_type = st.sidebar.radio(
+                            "Historical Chart Type", 
                             ["Line Chart", "Bar Chart"], 
-                            index=1, 
+                            index=1,
+                            key="hist_chart_type",
                             horizontal=True
                         )
 
-                        historical_fig = go.Figure()
+                        # --- FIX: Use the original CSV data for historical chart, not the processed/filtered model data ---
+                        filtered_df = df.copy()
 
-                        if historical_data is not None:
-                            if "PRODUCT" in historical_data.columns:
-                                # Plot each product as a separate line/bar
-                                for product in sorted(historical_data["PRODUCT"].astype(str).unique()):
-                                    prod_hist = historical_data[historical_data["PRODUCT"].astype(str) == str(product)]
-                                    if chart_type == "Line Chart":
-                                        historical_fig.add_trace(go.Scatter(
-                                            x=prod_hist["WEEK"],
-                                            y=prod_hist["ACTUAL"],
-                                            mode="lines",
-                                            name=f"Historical Actual - {product}",
-                                            line=dict(width=2),
-                                            opacity=0.7
-                                        ))
-                                    elif chart_type == "Bar Chart":
-                                        historical_fig.add_trace(go.Bar(
-                                            x=prod_hist["WEEK"],
-                                            y=prod_hist["ACTUAL"],
-                                            name=f"Historical Actual - {product}",
-                                            opacity=0.7
-                                        ))
+                        # Ensure WEEK is datetime for filtering (robust against already-converted columns)
+                        filtered_df["WEEK"] = pd.to_datetime(filtered_df["WEEK"], errors="coerce")
+
+                        # Remove rows with missing WEEK or UNITS
+                        filtered_df = filtered_df[pd.notnull(filtered_df["WEEK"]) & pd.notnull(filtered_df["UNITS"])]
+
+                        # Filter by product if applicable
+                        if product_filter is not None and "PRODUCT" in filtered_df.columns:
+                            filtered_df = filtered_df[filtered_df["PRODUCT"].astype(str).isin(product_filter)]
+
+                        # --- FIX: If UNITS column is string/object, convert to numeric ---
+                        if filtered_df["UNITS"].dtype not in [np.float64, np.int64]:
+                            filtered_df["UNITS"] = pd.to_numeric(filtered_df["UNITS"], errors="coerce")
+                        filtered_df = filtered_df[pd.notnull(filtered_df["UNITS"])]
+
+                        historical_fig = go.Figure()
+                        if not filtered_df.empty:
+                            if "PRODUCT" in filtered_df.columns:
+                                for product in sorted(filtered_df["PRODUCT"].astype(str).unique()):
+                                    prod_hist = filtered_df[filtered_df["PRODUCT"].astype(str) == str(product)]
+                                    if not prod_hist.empty:
+                                        if hist_chart_type == "Line Chart":
+                                            historical_fig.add_trace(go.Scatter(
+                                                x=prod_hist["WEEK"],
+                                                y=prod_hist["UNITS"],
+                                                mode="lines+markers",
+                                                name=f"Historical Actual - {product}",
+                                                line=dict(width=2),
+                                                marker=dict(size=6),
+                                                opacity=0.8
+                                            ))
+                                        elif hist_chart_type == "Bar Chart":
+                                            historical_fig.add_trace(go.Bar(
+                                                x=prod_hist["WEEK"],
+                                                y=prod_hist["UNITS"],
+                                                name=f"Historical Actual - {product}",
+                                                opacity=0.8
+                                            ))
                             else:
-                                if chart_type == "Line Chart":
+                                if hist_chart_type == "Line Chart":
                                     historical_fig.add_trace(go.Scatter(
-                                        x=historical_data["WEEK"],
-                                        y=historical_data["ACTUAL"],
-                                        mode="lines",
+                                        x=filtered_df["WEEK"],
+                                        y=filtered_df["UNITS"],
+                                        mode="lines+markers",
                                         name="Historical Actual",
                                         line=dict(color="gray", width=2),
-                                        opacity=0.7
+                                        marker=dict(size=6),
+                                        opacity=0.8
                                     ))
-                                elif chart_type == "Bar Chart":
+                                elif hist_chart_type == "Bar Chart":
                                     historical_fig.add_trace(go.Bar(
-                                        x=historical_data["WEEK"],
-                                        y=historical_data["ACTUAL"],
+                                        x=filtered_df["WEEK"],
+                                        y=filtered_df["UNITS"],
                                         name="Historical Actual",
                                         marker_color="gray",
-                                        opacity=0.7
+                                        opacity=0.8
                                     ))
+                        else:
+                            st.info("No historical data available for the selected date range or filters.")
 
                         historical_fig.update_layout(
-                            title=f"Historical Actuals - {target_col}",
+                            title="Historical Actuals - UNITS",
                             xaxis_title="Week",
-                            yaxis_title=target_col,
+                            yaxis_title="Units Sold",
                             hovermode="x unified",
                             height=500
                         )
-                        historical_fig.update_yaxes(tickformat="d", range=[y_min, y_max])
+                        # Set y-axis range if there is data
+                        if not filtered_df.empty:
+                            y_min = int(np.floor(filtered_df["UNITS"].min()))
+                            y_max = int(np.ceil(filtered_df["UNITS"].max()))
+                            if y_min == y_max:
+                                y_max = y_min + 1
+                            historical_fig.update_yaxes(tickformat="d", range=[y_min, y_max])
 
-                        st.plotly_chart(historical_fig, use_container_width=True)
+                        if len(historical_fig.data) > 0:
+                            st.plotly_chart(historical_fig, use_container_width=True)
+                        else:
+                            st.info("No data to display in the historical chart for the selected filters.")
                                             
                     with col2:
                         st.subheader("📈 Original vs Adjusted Forecasts")
+                        forecast_chart_type = st.sidebar.radio(
+                            "Forecast Chart Type", 
+                            ["Line Chart", "Bar Chart"], 
+                            index=1,
+                            key="forecast_chart_type",
+                            horizontal=True
+                        )
 
                         forecast_fig = go.Figure()
 
@@ -922,7 +1030,7 @@ def main():
                             for product in sorted(original_display_plot["PRODUCT"].astype(str).unique()):
                                 prod_orig = original_display_plot[original_display_plot["PRODUCT"].astype(str) == str(product)]
                                 prod_adj = adjusted_display_plot[adjusted_display_plot["PRODUCT"].astype(str) == str(product)]
-                                if chart_type == "Line Chart":
+                                if forecast_chart_type == "Line Chart":
                                     forecast_fig.add_trace(go.Scatter(
                                         x=prod_orig[x_col],
                                         y=prod_orig["FORECAST"] if "FORECAST" in prod_orig.columns else prod_orig["ADJUSTED_FORECAST"],
@@ -939,7 +1047,7 @@ def main():
                                         line=dict(width=3, dash="dash"),
                                         marker=dict(size=6)
                                     ))
-                                elif chart_type == "Bar Chart":
+                                elif forecast_chart_type == "Bar Chart":
                                     forecast_fig.add_trace(go.Bar(
                                         x=prod_orig[x_col],
                                         y=prod_orig["FORECAST"] if "FORECAST" in prod_orig.columns else prod_orig["ADJUSTED_FORECAST"],
@@ -953,7 +1061,7 @@ def main():
                                         opacity=0.7
                                     ))
                         else:
-                            if chart_type == "Line Chart":
+                            if forecast_chart_type == "Line Chart":
                                 forecast_fig.add_trace(go.Scatter(
                                     x=original_display_plot[x_col],
                                     y=original_display_plot["FORECAST"] if "FORECAST" in original_display_plot.columns else original_display_plot["ADJUSTED_FORECAST"],
@@ -970,7 +1078,7 @@ def main():
                                     line=dict(color="red", width=3, dash="dash"),
                                     marker=dict(size=6)
                                 ))
-                            elif chart_type == "Bar Chart":
+                            elif forecast_chart_type == "Bar Chart":
                                 forecast_fig.add_trace(go.Bar(
                                     x=original_display_plot[x_col],
                                     y=original_display_plot["FORECAST"] if "FORECAST" in original_display_plot.columns else original_display_plot["ADJUSTED_FORECAST"],

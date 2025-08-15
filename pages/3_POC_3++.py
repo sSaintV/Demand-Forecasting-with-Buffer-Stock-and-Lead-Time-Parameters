@@ -416,7 +416,6 @@ class DemandForecaster:
             "BASE_PRICE": "mean",
             "PRICE": "mean",
         }
-        
         if "DISPLAY" in df.columns:
             agg_dict["DISPLAY"] = "max"
         if "INVENTORY" in df.columns:
@@ -440,6 +439,14 @@ class DemandForecaster:
 
         weekly_data["price_ratio"] = weekly_data["PRICE"] / weekly_data["BASE_PRICE"]
         weekly_data["price_ratio"] = weekly_data["price_ratio"].fillna(1)
+
+        # --- FIX: One-hot encode all categorical columns except the target ---
+        categorical_cols = weekly_data.select_dtypes(include=["object"]).columns.tolist()
+        # Remove target and group columns from encoding
+        for col in [target_col, "WEEK"]:
+            if col in categorical_cols:
+                categorical_cols.remove(col)
+        weekly_data = pd.get_dummies(weekly_data, columns=categorical_cols, drop_first=True)
 
         return weekly_data
     
@@ -1259,6 +1266,15 @@ def main():
                                 on=["Week", "Product"],
                                 how="left",
                                 suffixes=("", "_new")
+                            )
+                            # --- Lead Time Consolidation for New Demand Forecast ---
+                            # Apply consolidation to Base Forecast, store result in New Demand Forecast
+                            comparison_df["New Demand Forecast"] = comparison_df["Base Demand Forecast"]
+                            comparison_df = consolidate_lead_time(
+                                comparison_df,
+                                lead_time_col="Lead Time (weeks)",
+                                demand_col="New Demand Forecast",
+                                group_cols=["Product"]
                             )
                             # Calculate differences
                             comparison_df["Difference (Demand)"] = comparison_df["Base Demand Forecast"] - comparison_df["New Demand Forecast"]

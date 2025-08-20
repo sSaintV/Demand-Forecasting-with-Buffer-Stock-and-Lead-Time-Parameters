@@ -853,6 +853,7 @@ def main():
                     # Use sim_base for adjusted_display if edits exist, else use adjusted_forecast_display
                     sim_base_for_chart = st.session_state.get("sim_base_df", None)
                     if sim_base_for_chart is not None and not sim_base_for_chart.empty:
+                        # Always use simulator table for chart if available
                         adjusted_display_for_chart = sim_base_for_chart.copy()
                         adjusted_display_for_chart["WEEK"] = adjusted_display_for_chart["Week"]
                         adjusted_display_for_chart["PRODUCT"] = adjusted_display_for_chart["Product"]
@@ -864,6 +865,10 @@ def main():
                         if "PRODUCT" not in adjusted_display_for_chart.columns and "Product" in adjusted_display_for_chart.columns:
                             adjusted_display_for_chart["PRODUCT"] = adjusted_display_for_chart["Product"]
                         adjusted_display_for_chart["ADJUSTED_FORECAST"] = adjusted_display_for_chart["ADJUSTED_FORECAST"]
+
+                    # Always filter by product filter and date range
+                    adjusted_display_for_chart = filter_all(adjusted_display_for_chart, "PRODUCT")
+                    adjusted_display_for_chart = filter_by_range(adjusted_display_for_chart, "WEEK", start_week, end_week)
                     
                     # --- Save original simulator table for reset functionality (only once per session or when data changes) ---
                     if "sim_base_original" not in st.session_state or st.session_state.get("sim_base_original_hash", None) != hash(display_adjusted.to_csv(index=False)):
@@ -1269,7 +1274,6 @@ def main():
                             )
                             # --- Lead Time Consolidation for New Demand Forecast ---
                             # Apply consolidation to Base Forecast, store result in New Demand Forecast
-                            comparison_df["New Demand Forecast"] = comparison_df["Base Demand Forecast"]
                             comparison_df = consolidate_lead_time(
                                 comparison_df,
                                 lead_time_col="Lead Time (weeks)",
